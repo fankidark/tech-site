@@ -1,0 +1,38 @@
+import { defineConfig } from 'vitepress'
+
+export default defineConfig({
+  title: 'TechDeepDive',
+  description: '技术细节解析站 — 引擎源码深度解析',
+  lang: 'zh-CN',
+  lastUpdated: true,
+  cleanUrls: true,
+  themeConfig: {
+    nav: [
+      { text: '首页', link: '/' },
+      { text: 'Unity 内存管理', link: '/unity-memory/' },
+      { text: 'GitHub', link: 'https://github.com/fankidark/tech-site' },
+    ],
+    sidebar: {
+      '/unity-memory/': [
+        {
+          text: 'Unity 内存管理分配细节',
+          collapsed: false,
+          items: [
+            { text: '总览：分配器体系', link: '/unity-memory/' },
+            { text: 'TLS：每线程临时内存分配', link: '/unity-memory/tls' },
+            { text: 'TLSF：两级分割适应算法', link: '/unity-memory/tlsf' },
+            { text: 'DynamicHeapAllocator：TLSF 的工程集成', link: '/unity-memory/dynamic-heap' },
+          ],
+        },
+      ],
+    },
+    outline: { level: [2, 3], label: '本页目录' },
+    socialLinks: [
+      { icon: 'github', link: 'https://github.com/fankidark/tech-site' },
+    ],
+    footer: {
+      message: '基于 Unity 源码（2020 LTS）逐行核实',
+      copyright: 'TechDeepDive © 2026',
+    },
+  },
+})

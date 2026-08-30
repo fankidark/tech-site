@@ -1,0 +1,13 @@
+{
+  "name": "tech-site",
+  "version": "0.1.0",
+  "description": "技术细节解析站 - Unity 引擎源码深度解析",
+  "scripts": {
+    "dev": "vitepress dev docs",
+    "build": "vitepress build docs",
+    "preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3"
+  }
+}
