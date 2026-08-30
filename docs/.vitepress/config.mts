@@ -19,6 +19,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: '总览：分配器体系', link: '/unity-memory/' },
+            { text: '🧪 交互模拟器（TLSF 可视化）', link: '/unity-memory/tlsf-sim' },
             { text: 'TLS：每线程临时内存分配', link: '/unity-memory/tls' },
             { text: 'TLSF：两级分割适应算法', link: '/unity-memory/tlsf' },
             { text: 'DynamicHeapAllocator：TLSF 的工程集成', link: '/unity-memory/dynamic-heap' },
