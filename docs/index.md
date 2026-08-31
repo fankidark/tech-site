@@ -25,4 +25,4 @@ features:
 
 # 技术主题
 
-- **[Unity 内存管理分配细节](/unity-memory/)** — TLS 每线程临时分配 + TLSF 两级分割适应算法 + DynamicHeapAllocator 工程集成
+- **[Unity 内存管理分配细节](/unity-memory/)** — 从 `UNITY_NEW` 宏到物理内存的完整旅程：TLS 每线程临时分配 + TLSF 两级分割适应算法 + DynamicHeapAllocator 工程集成 + AtomicStack 无锁栈 + Deallocate 反查 + 托管堆 GC（IL2CPP 不分代不压缩）· 含 2 个交互模拟器
