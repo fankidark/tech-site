@@ -30,6 +30,8 @@
 
 而 Boehm 是 **conservative GC（保守式 GC）**：它**猜**。任何看起来像堆地址的字长都被当作潜在引用。这个根本选择，直接决定了后面所有结论。
 
+> 📌 **先给一个"半精确"的修正**：Unity 对 Boehm 做了工程化升级——用 **GCJ 描述符**（每类编译期生成引用 bitmap）让**对象内部字段精确识别**，保守的部分收缩到**栈、寄存器、静态区、string/array**。所以准确的表述是：**"栈上/静态区保守 + 对象内半精确"的 GC**。下文先按保守式讲因果，机制细节见 [IL2CPP 与 BoehmGC 的关联](#il2cpp-与-boehmgc-的关联适配层与调用链)。
+
 ```
 保守式扫描 ⇒ 可能把一个整数误判成引用（false positive）
           ⇒ 无法确定某个位置到底是不是引用
@@ -128,6 +130,92 @@ il2cpp::gc::GarbageCollector::AllocateFixed(size_t size, void *descr)
 ```
 
 `no_dls` = no dynamic library data segments。Unity 关掉了 bdwgc 对动态库数据段的自动扫描，改为手动 push 根。这是对保守式扫描范围的**收窄优化**，但不改变"栈和寄存器仍然是保守扫描"的本质。
+
+## IL2CPP 与 BoehmGC 的关联：适配层与调用链
+
+> 直接回答三个问题：**① Unity 源码树里到底有没有 GC 代码？② Boehm 是怎么"接"进 IL2CPP 的？③ .NET 的 GC 和它有什么本质区别？**
+
+### ① 源码在哪：引擎没有，但 IL2CPP 目录里有完整两套
+
+| 位置 | 内容 | 说明 |
+|---|---|---|
+| `Runtime/`（引擎本体） | ❌ **没有 GC 实现** | 引擎 C++ 不管托管堆——托管内存是脚本运行时的事 |
+| `External/il2cpp/builds/libil2cpp/gc/` | ✅ **GC 适配层**（13 个文件） | `BoehmGC.cpp`（Boehm 适配）、`GarbageCollector.cpp`（il2cpp 自己的 GC 接口）、`GCHandle.cpp`、`WriteBarrier.cpp`、`NullGC.cpp`（无 GC 后端） |
+| `External/il2cpp/builds/external/bdwgc/` | ✅ **Boehm 本体完整源码**（33 个 .c） | `alloc.c` / `mark.c` / `reclaim.c` / `blacklst.c` / `backgraph.c` 等——**这就是那个"猜指针"的 GC 的全部实现** |
+| `External/MonoBleedingEdge/` | ❌ **0 个 .c 文件** | Mono 只有预编译产物（builds.7z），无 C 源码——所以 Mono 侧结论只能靠产物证据（见后文） |
+
+### ② 怎么接进去的：编译期宏 + 适配层接口
+
+```cpp
+// libil2cpp/il2cpp-config.h:189
+#define IL2CPP_GC_BOEHM 1
+#define IL2CPP_GC_NULL !IL2CPP_GC_BOEHM
+```
+
+**GC 后端是编译期选定的**（Unity 2020 这版构建选 Boehm），不是运行时开关。选 Boehm 时，`gc/BoehmGC.cpp` 被编译，它把 il2cpp 的 GC 抽象接口逐一映射到 bdwgc API：
+
+| il2cpp 接口（GarbageCollector.h） | BoehmGC.cpp 实现 | bdwgc API |
+|---|---|---|
+| `Allocate(size)` | `return GC_MALLOC(size)` | 保守分配 |
+| `AllocateFixed(size, descr)` | `return GC_MALLOC_UNCOLLECTABLE(size)` | 不回收内存（Pinned） |
+| `FreeFixed(addr)` | `GC_FREE(addr)` | 手动释放 |
+| `Collect(maxGeneration)` | `GC_gcollect()` | 全堆回收 |
+| `StartIncrementalCollection()` | `GC_enable_incremental()` | 增量模式 |
+| `MakeDescriptorForObject(bitmap, numbits)` | `GC_make_descriptor(...)` | GCJ 描述符 |
+
+### ③ 一次 C# `new` 的完整 GC 路径
+
+```mermaid
+flowchart TB
+    A["C#: new Foo()"] --> B["生成代码: il2cpp_object_new(klass)<br/>il2cpp-api.cpp:1033"]
+    B --> C["vm/Object.cpp: New(klass)"]
+    C --> D{"klass->has_references?"}
+    D -->|"否"| E["NewPtrFree → GC_MALLOC_ATOMIC<br/>Boehm 完全不扫描该对象"]
+    D -->|"是"| F{"klass->gc_desc != GC_NO_DESCRIPTOR?"}
+    F -->|"是"| G["AllocateSpec → GC_gcj_malloc<br/>GCJ 描述符模式：对象内引用<b>精确</b>识别"]
+    F -->|"否"| H["Allocate → GC_MALLOC<br/>保守模式：整个对象当字节扫"]
+    E & G & H --> I["返回指针，构造函数执行"]
+    style E fill:#d0ebff,stroke:#1971c2
+    style G fill:#b2f2bb,stroke:#2f9e44
+    style H fill:#fff3bf,stroke:#f08c00
+```
+
+### ④ 关键深化：GCJ 描述符 = "半精确" GC
+
+这是 Unity 对 Boehm 最值的工程化改造——**不是完全靠猜**：
+
+```cpp
+// vm/Class.cpp:1960 SetupGCDescriptor —— 每个类初始化时
+void SetupGCDescriptor(Il2CppClass* klass)
+{
+    GetBitmapNoInit(klass, bitmap, maxSetBit, 0);   // 遍历字段，标记哪些 offset 是引用
+    if (klass == il2cpp_defaults.string_class)
+        klass->gc_desc = MakeDescriptorForString();            // string → 无描述符（保守）
+    else if (klass->rank)
+        klass->gc_desc = MakeDescriptorForArray();             // array → 无描述符（保守）
+    else
+        klass->gc_desc = MakeDescriptorForObject(bitmap, (int)maxSetBit + 1);
+}
+
+// gc/BoehmGC.cpp:350
+void* GarbageCollector::MakeDescriptorForObject(size_t *bitmap, int numbits)
+{
+    if (numbits >= 30)                    // bitmap 超过 30 位装不下 → 退回保守
+        return GC_NO_DESCRIPTOR;
+    return (void*)GC_make_descriptor((GC_bitmap)bitmap, numbits);  // GCJ bitmap 描述符
+}
+```
+
+含义：
+
+- **普通对象**：编译期生成引用 bitmap（哪个字段偏移是引用）→ `GC_gcj_malloc` 精确标记——**这类对象内部不会误判**；
+- **string / array**：无描述符 → 保守扫描（内容可能被误判）——这就是为什么"整数字段恰好等于某地址"的 false positive 仍然存在；
+- **bitmap > 30 位**（字段太多的对象）：退回保守；
+- **栈、寄存器、静态区**：永远保守（无类型信息）。
+
+所以之前所有"保守式"结论的正确边界是：**对象内引用"半精确"（GCJ 描述符），根集合（栈/寄存器/静态区）与 string/array 内容"保守"**。不分代、不压缩的结论不变——因为根集合和未覆盖对象仍是保守的，移动对象依然危险。
+
+
 
 ## 那 Unity 靠什么降卡顿？—— 增量式
 
@@ -332,6 +420,56 @@ Unity 检出树里没有 Mono 的 C 源码（`External/MonoBleedingEdge/` 只有
 
 **⚠️ 最危险的是跨后端假设**：在 Editor（Mono）里测出来没问题的 GC 行为，到真机（IL2CPP）上可能完全不同——尤其是**碎片累积**和 `GC.Collect(0)` 这两项。Editor 下 sgen 会帮你整理碎片，真机上 Boehm 不会。
 
+### .NET CoreCLR：第三种后端（平时说的 ".NET GC" 是它）
+
+> 玩家设备上的 Unity 游戏跑的是 Boehm；PC 上的 .NET 应用（以及 Unity 未来可能切换的 NativeAOT/自定义后端）跑的是 **CoreCLR GC**——**这才是大多数 .NET 文档讲的"分代 GC"**。三端对比：
+
+| 维度 | Unity IL2CPP（Boehm/bdwgc） | Unity Mono（sgen） | .NET CoreCLR |
+|---|---|---|---|
+| 精确性 | **半精确**：GCJ 描述符管对象内，栈/静态区/string/array 保守 | **完全精确**（JIT 报告栈帧引用） | **完全精确**（JIT 报告栈帧引用） |
+| 分代 | ❌ 不分代，`GetMaxGeneration()`=0 | ✅ 2 代（nursery + major） | ✅ 3 代（gen0/1/2）+ LOH（大对象堆，≥85,000B） |
+| 是否移动/压缩 | ❌ 不移动 | ✅ nursery 复制（copying） | ✅ gen0/1 压缩（plan → relocate → compact）；LOH 不压缩（代价高） |
+| 分配 | GC_MALLOC（位图查找） | nursery bump 指针（快） | bump 指针 + 分配量子（8k quantum，无锁） |
+| 写屏障 | MANUAL_VDB 页级脏位（仅增量时） | card table（JIT 常驻） | **card table**（JIT 常驻，标记跨代引用） |
+| 并发/后台 GC | 增量式（3ms 时间片） | concurrent（by default） | 后台 GC（WKS/SVR 两种模式） |
+| 触发方式 | 分配/手动 Collect | 分配/手动 Collect | 分配预算超限（allocation budget） |
+| 浮点垃圾 | 增量期有 | concurrent 期有 | 后台 GC 期有 |
+
+要点（对齐 CoreCLR 官方设计文档 [garbage-collection.md](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/garbage-collection.md)）：
+
+- **分代是为了"只收一部分"**：收集 gen0 只需看卡表标记的跨代引用 + 根，不用全堆扫——这是 Boehm 做不到的（它没有可靠的跨代引用集合）；
+- **压缩是为了分配快**：gen0 压缩后空闲区连续，分配退化为 bump 指针 + 8KB quantum 无锁分配（CoreCLR 文档 "Efficient locking" 一节）——Boehm 的 GC_MALLOC 要走位图/空闲链表；
+- **LOH 不压缩**（≥85KB 对象）：移动大对象太贵，用独立的代 + 非压缩回收——这跟 Boehm 的"大对象不移动"理由同源（移动成本高），但 CoreCLR 是**主动设计选择**，Boehm 是**保守扫描的被迫**。
+
+**一句话**：.NET 的 GC 是"精确 + 分代 + 压缩"的集大成者，Unity IL2CPP 的 Boehm 是"半精确 + 不分代 + 不压缩"的保守派，Mono sgen 夹在中间（精确 + 分代 + nursery 复制）。三者性能模型完全不同，**用 .NET 的 GC 知识套 Unity IL2CPP 会得出错误结论**。
+
+## 文献与参考来源
+
+### 外部文献（URL 已验证可访问）
+
+| 文献 | 说明 |
+|---|---|
+| [CoreCLR Garbage Collection Design（Maoni Stephens, 2015）](https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/garbage-collection.md) | .NET GC 官方设计文档：分代/卡表/压缩/WKS·SVR/后台 GC 全流程 |
+| [Mono SGen Generational GC（官方文档）](https://www.mono-project.com/docs/advanced/garbage-collector/sgen) | sgen 的 nursery（默认 4MB，可用 `MONO_GC_PARAMS` 调）、分代、并发机制 |
+| [Mono 构建选项（README）](https://github.com/mono/mono) | `--with-sgen` / `--with-libgc`：Mono 历史上同时支持 Boehm 与 sgen 两种后端（`mono-boehm` / `mono-sgen` 两个二进制） |
+| [bdwgc 官方仓库（ivmai/bdwgc）](https://github.com/ivmai/bdwgc) | Boehm-Demers-Weiser GC 本体：`alloc.c`/`mark.c`/`reclaim.c` 等源码 + 论文（doc/） |
+| Boehm & Weiser, *Garbage Collection in an Uncooperative Environment* (1988) | 保守式 GC 奠基论文（ACM 原文 403 反爬，可经 bdwgc 仓库 doc/ 或学校镜像获取） |
+| *The Garbage Collection Handbook* (Jones, Hosking, Moss) | GC 领域标准参考书（CoreCLR 官方文档也推荐） |
+| *Pro .NET Memory Management* (Maoni Stephens) | .NET GC 实操向权威书（CoreCLR 官方文档推荐） |
+
+### 本地源码路径索引（Unity 2020 LTS）
+
+| 路径 | 内容 |
+|---|---|
+| `External/il2cpp/builds/libil2cpp/il2cpp-config.h:189` | `IL2CPP_GC_BOEHM 1` 编译期选后端 |
+| `External/il2cpp/builds/libil2cpp/gc/` | GC 适配层：BoehmGC.cpp / GarbageCollector.cpp / GCHandle.cpp / WriteBarrier.cpp / NullGC.cpp |
+| `External/il2cpp/builds/libil2cpp/vm/Object.cpp:285-310` | 分配三分支（NewPtrFree / AllocateSpec / Allocate） |
+| `External/il2cpp/builds/libil2cpp/vm/Class.cpp:1960` | SetupGCDescriptor：每类生成引用 bitmap |
+| `External/il2cpp/builds/libil2cpp/gc/BoehmGC.cpp:350` | MakeDescriptorForObject → GC_make_descriptor |
+| `External/il2cpp/builds/libil2cpp/il2cpp-api.cpp:1033` | il2cpp_object_new 生成代码入口 |
+| `External/il2cpp/builds/external/bdwgc/` | Boehm 本体（alloc.c / mark.c / reclaim.c / blacklst.c ... 33 个 .c） |
+| `External/MonoBleedingEdge/` | Mono 预编译产物（**无 C 源码**） |
+
 ## 证据索引（行号已实测复验）
 
 | 结论 | 文件 | 行号 |
@@ -348,6 +486,11 @@ Unity 检出树里没有 Mono 的 C 源码（`External/MonoBleedingEdge/` 只有
 | GC_dirty 双重门控 | `bdwgc/include/private/gc_priv.h` | 2196 |
 | stubborn API 借壳 | `bdwgc/mallocx.c` | 604-617 |
 | 勾选项 → 换库 | `BuildPostProcessor.cs` | 1414-1415 |
+| 编译期选 Boehm 后端 | `libil2cpp/il2cpp-config.h` | 189-190 |
+| GC 描述符生成 | `libil2cpp/vm/Class.cpp` | 1960-1980 |
+| 分配三分支（描述符/原子/保守） | `libil2cpp/vm/Object.cpp` | 285-310 |
+| GCJ 描述符 → bdwgc | `libil2cpp/gc/BoehmGC.cpp` | 350-362 |
+| 对象分配 C API 入口 | `libil2cpp/il2cpp-api.cpp` | 1033 |
 
 **踩过的坑（自我修正记录）**：
 
