@@ -217,6 +217,51 @@ void* GarbageCollector::MakeDescriptorForObject(size_t *bitmap, int numbits)
 
 所以之前所有"保守式"结论的正确边界是：**对象内引用"半精确"（GCJ 描述符），根集合（栈/寄存器/静态区）与 string/array 内容"保守"**。不分代、不压缩的结论不变——因为根集合和未覆盖对象仍是保守的，移动对象依然危险。
 
+### ⑤ 深挖：bitmap 是怎么来的（顺序要求与对象布局）
+
+`SetupGCDescriptor` 不是随便生成 bitmap 的——**它要求字段布局先就绪**，且 bitmap 与内存布局严格一一对应：
+
+```
+数据流：metadata 字段表 → SetupFields 填 field->offset → GetBitmapNoInit 按 offset 置位 → GC_make_descriptor → klass->gc_desc
+```
+
+**对象实例布局**（64 位，对象头 16 字节）：
+
+```mermaid
+flowchart LR
+    subgraph obj["对象实例 Foo 的堆内存"]
+        H["Il2CppObject 头 (16B)<br/>klass/vtable (8B) | monitor (8B)"]
+        B["基类字段区<br/>Base.a (8B, 引用)<br/>Base.b (4B, int)"]
+        D["派生字段区<br/>Foo.x (8B, 引用)<br/>Foo.y (8B, string)"]
+    end
+    H --> B --> D
+```
+
+**引用 bitmap 语义**（`set_bit(bitmap, offset / sizeof(void*))`，Class.cpp:1905）——每个 bit = 对象里一个 8 字节 word：
+
+```
+word:     0     1     2     3     4     5
+        ┌─────┬─────┬─────┬─────┬─────┬─────┐
+        │head │head │a    │b    │x    │y    │
+        │klass│mon. │(ref)│(int)│(ref)│(ref)│
+        └─────┴─────┴─────┴─────┴─────┴─────┘
+bit:      0     1     1     0     1     1      → GC_make_descriptor(0b110110)
+```
+
+**顺序要求（三条硬依赖）**：
+
+1. **bitmap 位 = 绝对 offset/8**——offset 由 `SetupFields` 从 metadata 填入（Class.cpp:823 `field->offset = fieldOffsets[fieldIndex]`）。SetupGCDescriptor 调用点（Class.cpp:1485）在 SetupFields（308 行）之后，**字段布局没就绪 bitmap 全错**；
+2. **struct 字段递归**（Class.cpp:1934）：遇到 `VALUETYPE` 字段要 `Class::Init(fieldClass)` **递归进 struct 内部**把引用字段也置位——被递归的 struct 类必须先初始化（否则查不到 `has_references`）；
+3. **遍历 = 当前类 → parent 链向上**（Class.cpp:1873-1928），但置位用绝对偏移——**bitmap 与内存布局严格一一对应**，字段声明顺序/继承顺序改变会直接改 bitmap 值。
+
+**Il2CppClass（klass）是什么**：整个类型的运行时"总台账"（il2cpp-class-internals.h:388，注释明确分两段）：
+
+- **Always valid（身份段）**：`image / name / namespace / parent / gc_desc / klass(自指针 hack)`——构造即用；
+- **需 Init（布局/行为段）**：`fields[] / methods[] / properties[] / implementedInterfaces[] / static_fields / rgctx_data / typeHierarchy`——Class::Init 逐个填；
+- **实例数据**：`instance_size / actualSize / element_size / static_fields_size / flags / token / field_count`。
+
+谁都在用它：**分配**（Object.cpp 查 `instance_size`/`has_references`/`gc_desc` 走三分支）、**方法调用**（vtable）、**类型检查**（parent/typeHierarchy）、**GC**（gc_desc）、**泛型**（generic_class/rgctx_data）。**klass 是 C# 类型在 IL2CPP 世界里的化身**。
+
 
 
 ## 那 Unity 靠什么降卡顿？—— 增量式
