@@ -1,11 +1,17 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   title: 'TechDeepDive',
   description: '技术细节解析站 — 引擎源码深度解析',
   lang: 'zh-CN',
   lastUpdated: true,
   cleanUrls: true,
+  vite: {
+    optimizeDeps: {
+      include: ['mermaid'],
+    },
+  },
   themeConfig: {
     nav: [
       { text: '首页', link: '/' },
@@ -40,4 +46,4 @@ export default defineConfig({
       copyright: 'TechDeepDive © 2026',
     },
   },
-})
+}))

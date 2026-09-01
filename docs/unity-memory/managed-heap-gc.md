@@ -39,6 +39,19 @@
           ⇒ 不能分代 ❌
 ```
 
+```mermaid
+flowchart LR
+    A["保守式扫描<br/>（不知道哪 8 字节是引用，靠猜）"] --> B["可能把整数误判成引用<br/>（false positive）"]
+    B --> C["无法确定某位置是否真是引用"]
+    C --> D["不敢移动对象<br/>（移了就得改引用，但改哪些？）"]
+    D --> E["不能压缩 ❌"]
+    C --> F["无法维护可靠的跨代引用集合"]
+    F --> G["不能分代 ❌"]
+    style A fill:#ffc9c9,stroke:#e03131
+    style E fill:#ffc9c9,stroke:#e03131
+    style G fill:#ffc9c9,stroke:#e03131
+```
+
 **"不分代不压缩"不是 Unity 偷懒，是保守式 GC 的必然结果。**
 
 ## 🧪 动手体验：保守式标记-清除 GC 模拟器
@@ -133,7 +146,7 @@ GC_enable_incremental()  +  GC_set_time_limit(3ms)
 ```
 
 ```csharp
-// BuildPostProcessor.cs:1408（iOS/Android 打包脚本）
+// BuildPostProcessor.cs:1409（iOS/Android 打包脚本）
 var level = PlayerSettings.GetApiCompatibilityLevel(bs.targetGroup);
 if (level == ApiCompatibilityLevel.NET_4_6 || level == ApiCompatibilityLevel.NET_Standard_2_0)
 {

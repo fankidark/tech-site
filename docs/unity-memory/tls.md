@@ -29,6 +29,21 @@ static int s_NumberOfInstances;
 
 ## 每线程的分配流程
 
+```mermaid
+flowchart TB
+    A["线程 A 首次分配"] --> B["ThreadInitialize(threadStackSize)"]
+    B --> C["new StackAllocator<br/>m_UniqueThreadAllocator = 该实例（存入 TLS）"]
+    C --> D["注册到 m_ThreadAllocators 列表<br/>（供 Profiler 遍历）"]
+    D --> E["线程 A 后续分配 → TLSAllocator::Allocate()"]
+    E --> F["StackAllocator* sa = m_UniqueThreadAllocator<br/>← 读 TLS，无锁"]
+    F --> G["sa->Allocate(size, align)<br/>← 栈式分配，无锁"]
+    G --> H["帧末尾 → FrameMaintenance(cleanup)"]
+    H --> I["sa->Reset()<br/>← 栈顶回退，整体回收"]
+    style C fill:#b2f2bb,stroke:#2f9e44
+    style F fill:#b2f2bb,stroke:#2f9e44
+    style I fill:#ffec99,stroke:#f08c00
+```
+
 ```
 线程 A 首次分配
   → ThreadInitialize(threadStackSize)

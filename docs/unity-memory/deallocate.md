@@ -20,7 +20,7 @@
 
 ## BlockInfo 表：整个进程地址空间的"户口本"
 
-核心思想：所有 allocator 向 OS 要内存都经过同一个入口（`ReserveMemoryBlock`），要的时候**顺手登记**——"这段地址归 allocator #7 所有"。登记粒度是 `kReserveBlockGranularity`（64 位平台 256KB）：
+核心思想：所有 allocator 向 OS 要内存都经过同一个入口（`ReserveMemoryBlock`），要的时候**顺手登记**——"这段地址归 allocator #7 所有"。登记粒度是 `kReserveBlockGranularity`（**分平台：PC 64 位 256MB / iOS·主机 256KB / 32 位 64KB**，见 `LowLevelDefaultAllocator.h:35-70`）：
 
 ```
 进程地址空间（按 256KB 切格）
@@ -98,7 +98,7 @@ void MemoryManager::Deallocate(void* ptr, const char* file, int line)
 ### 关键 3：GetAllocatorContainingPtr —— 反查的实现
 
 ```cpp
-// MemoryManager.cpp:1616(区域)
+// MemoryManager.cpp:2134
 BaseAllocator* MemoryManager::GetAllocatorContainingPtr(const void* ptr)
 {
     BaseAllocator* alloc = m_LowLevelAllocator.GetAllocatorFromPointer(ptr);
@@ -114,6 +114,8 @@ BaseAllocator* MemoryManager::GetAllocatorContainingPtr(const void* ptr)
     return NULL;
 }
 ```
+
+> 注：`GetAllocatorContainingPtr` 定义在 `MemoryManager.cpp:2134`（无 label 的 `Deallocate(ptr)` 在 1972 行调用它）。
 
 三级反查：**BlockInfo 表 O(1) 命中 → 遍历所有 allocator 逐个 Contains → 引擎启动前的 initial fallback**。
 

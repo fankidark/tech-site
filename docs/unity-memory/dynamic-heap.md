@@ -1,7 +1,7 @@
 # DynamicHeapAllocator：TLSF 的工程集成
 
 > 源码：`Runtime/Allocator/DynamicHeapAllocator.cpp` / `.h`
-> Unity 把纯 C 的 TLSF 封装成生产级分配器：**256MB 虚拟预留 + 多 Pool 扩展 + BucketAllocator 快路径 + LargeAlloc 溢出路径**。
+> Unity 把纯 C 的 TLSF 封装成生产级分配器：**大块虚拟预留（分平台 64KB~256MB）+ 多 Pool 扩展 + BucketAllocator 快路径 + LargeAlloc 溢出路径**。
 
 ## 设计总览（源码注释）
 
@@ -9,12 +9,22 @@
 
 > DynamicHeapAllocator - 基于 TLSF 的主力通用分配器
 > TLSF (Two-Level Segregated Fit) 算法:
->   VirtualAllocator 预留大块虚拟地址 (kReserveBlockGranularity = 256MB)
+>   VirtualAllocator 预留大块虚拟地址 (kReserveBlockGranularity)
 >   → 划分为多个 Pool (每个 Pool 是一个独立的 TLSF 实例)
 >   → 每个 Pool 内部 TLSF 管理小块分配
 >   - 小分配先尝试 BucketAllocator (≤64B, lock-free, 更快)
 >   - 中等分配走 TLSF (确定性 O(1))
 >   - 大分配直接向 VirtualAllocator 申请独立块
+
+⚠️ **kReserveBlockGranularity 分平台不同**（`LowLevelDefaultAllocator.h:35-70`）：
+
+| 平台 | 值 | 说明 |
+|---|---|---|
+| PC/通用 64 位（win/linux，`#else` 分支） | `1<<28` = **256MB** | MEMORY_USE_LARGE_BLOCKS=1，一块预留切多个 Pool |
+| iOS / PS4 / PS5 / OSX / Switch | `1<<18` = **256KB** | MEMORY_USE_LARGE_BLOCKS=0 |
+| 32 位平台 | `1<<16` = **64KB** | MEMORY_USE_LARGE_BLOCKS=0 |
+
+下文以 PC 64 位（256MB 预留）为例。
 
 ## 内存布局
 
@@ -54,8 +64,8 @@ DynamicHeapAllocator::DynamicHeapAllocator(
     : m_BucketAllocator(bucketAllocator)
     , m_UseLocking(useLocking)
 {
-    m_RequestedPoolSize = poolIncrementSize;   // 单个 Pool 大小（2 的幂）
-    m_RequestedBlockSize = LowLevelVirtualAllocator::kReserveBlockGranularity; // 256MB
+    m_RequestedPoolSize = poolIncrementSize;   // 单个 Pool 大小（默认 16MB = kDynamicHeapChunkSize）
+    m_RequestedBlockSize = LowLevelVirtualAllocator::kReserveBlockGranularity; // PC 64 位 = 256MB
     m_RequestedBlockSize = std::max(m_RequestedBlockSize, (size_t)poolIncrementSize);
 #if MEMORY_USE_LARGE_BLOCKS
     m_PoolsPerBlock = m_RequestedBlockSize / poolIncrementSize;  // 一块 256MB 切 N 个 Pool
@@ -141,16 +151,41 @@ void* DynamicHeapAllocator::Allocate(size_t size, int align)
 ## Pool 扩展策略
 
 - 初始：只创建 TLSF 控制结构，**不预分配用户内存**（懒加载）
-- 首次分配：`CreateTLSFPool()` 从 256MB 预留中切出第一个 Pool（大小 = `m_RequestedPoolSize`，默认 64KB/128KB 级别，可按需配置）
+- 首次分配：`CreateTLSFPool()` 从大块预留中切出第一个 Pool（大小 = `m_RequestedPoolSize`，默认 **16MB** = `kDynamicHeapChunkSize`，MemoryManager.cpp:291；fallback allocator 用 1MB）
 - 后续 TLSF 满：`size < m_RequestedPoolSize/2` 时继续切新 Pool 并 `tlsf_add_pool`（一个 TLSF 实例可挂多个 pool）
 - 大请求（≥ Pool/2）：直接 `RequestLargeAllocMemory`，避免大块挤占 Pool 空间造成碎片
 
 ## 为什么分 Pool
 
-TLSF 的单 pool 是连续内存段。Unity 用 256MB 虚拟预留 + 多 Pool：
-1. **虚拟地址连续，物理按需 commit**：256MB 只是 reserve，真正 commit 才占物理内存
+TLSF 的单 pool 是连续内存段。Unity 用大块虚拟预留 + 多 Pool：
+1. **虚拟地址连续，物理按需 commit**：预留只是 reserve，真正 commit 才占物理内存
 2. **碎片隔离**：大块走 LargeAlloc，不和小块混在同一个 Pool 里
 3. **Pool 粒度管理**：Pool 用完可以整块归还，分配计数 `allocationCount` 支持空 Pool 检测
+
+## 分配流程（图文步骤）
+
+```mermaid
+flowchart TB
+    A["Allocate(size, align)"] --> B{"m_BucketAllocator<br/>CanAllocate(size, align)?<br/>≤64B"}
+    B -->|"是"| C["BucketAllocator 无锁桶<br/>几十纳秒返回"]
+    B -->|"否"| D["realSize = size + AllocationHeader<br/>+ TLSF 块对齐"]
+    D --> E{"m_UseLocking?"}
+    E -->|"是"| F["m_DHAMutex.Lock()"]
+    E -->|"否"| G["免锁（主线程版）"]
+    F --> H["tlsf_memalign 主路径"]
+    G --> H
+    H --> I{"TLSF 池命中?"}
+    I -->|"是"| J["GetPoolInfo->allocationCount += 1"]
+    I -->|"否"| K{"size < Pool/2?"}
+    K -->|"是"| L["CreateTLSFPool() 从预留切新 Pool<br/>tlsf_add_pool → 重试"]
+    K -->|"否"| M["LargeAlloc 直通虚拟内存页"]
+    L --> N{"重试成功?"}
+    N -->|"否"| M
+    J & M --> O["写 AllocationHeader → 返回用户指针"]
+    style C fill:#b2f2bb,stroke:#2f9e44
+    style H fill:#fff3bf,stroke:#f08c00
+    style M fill:#ffc9c9,stroke:#e03131
+```
 
 ## 与 TLSAllocator 的分工
 
@@ -160,7 +195,7 @@ TLSF 的单 pool 是连续内存段。Unity 用 256MB 虚拟预留 + 多 Pool：
 | 结构 | 每线程 StackAllocator | TLSF + Bucket + LargeAlloc |
 | 锁 | 无锁 | 可选互斥锁（useLocking） |
 | 回收 | 帧末整体重置 | free 时合并 |
-| 容量 | Editor 128MB / Runtime 8MB | 256MB 虚拟预留 + 懒扩展 |
+| 容量 | Editor 128MB / Runtime 8MB | 大块虚拟预留（PC 256MB）+ 懒扩展 |
 
 **典型协作**：`Allocator.Temp` 数据帧末被 TLSAllocator 整体回收；需要跨帧存活的数据（`Allocator.Persistent`）走 DynamicHeapAllocator；两者都最终向 `LowLevelVirtualAllocator`（系统虚拟内存）要页。
 
@@ -168,7 +203,7 @@ TLSF 的单 pool 是连续内存段。Unity 用 256MB 虚拟预留 + 多 Pool：
 
 | 位置 | 内容 |
 |---|---|
-| `DynamicHeapAllocator.cpp:84` | 构造函数（Pool 大小、锁、256MB 预留） |
+| `DynamicHeapAllocator.cpp:84` | 构造函数（Pool 大小、锁、大块预留） |
 | `DynamicHeapAllocator.cpp:113` | `InitializeTLSF()` |
 | `DynamicHeapAllocator.cpp:409` | `Allocate()` 三级路径 |
 | `DynamicHeapAllocator.cpp:21-54` | 内存布局 ASCII 图 |
