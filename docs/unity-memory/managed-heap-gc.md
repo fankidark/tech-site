@@ -137,6 +137,8 @@ il2cpp::gc::GarbageCollector::AllocateFixed(size_t size, void *descr)
 
 ### ① 源码在哪：引擎没有，但 IL2CPP 目录里有完整两套
 
+> **名词澄清**：Boehm = Boehm-Demers-Weiser GC（算法/作者名），bdwgc = 它的开源仓库名，libgc = 它的库链接名——**是同一个实现**。Unity 里 `gc/BoehmGC.cpp`（适配层）和 `external/bdwgc/`（本体）是同一套东西的两面。
+
 | 位置 | 内容 | 说明 |
 |---|---|---|
 | `Runtime/`（引擎本体） | ❌ **没有 GC 实现** | 引擎 C++ 不管托管堆——托管内存是脚本运行时的事 |
