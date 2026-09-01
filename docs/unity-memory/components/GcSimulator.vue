@@ -4,11 +4,15 @@
       <button @click="allocObject" :disabled="allocCount >= MAX_OBJS">+ 分配对象</button>
       <button @click="breakRandomRef" :disabled="phase === 'marking' || phase === 'sweeping'">断开一个引用</button>
       <button class="primary" @click="runGC" :disabled="phase === 'marking' || phase === 'sweeping'">▶ 运行 GC</button>
-      <button v-if="phase === 'marking' || phase === 'sweeping'" class="skip" @click="skip = true">⏩ 跳过动画</button>
+      <button v-if="phase === 'marking' || phase === 'sweeping'" class="skip" @click="skip = true">⏩ 跳过</button>
       <button @click="reset" :disabled="phase === 'marking' || phase === 'sweeping'">重置</button>
     </div>
 
     <div class="toggles">
+      <label class="toggle">
+        <input type="checkbox" v-model="stepMode" />
+        <span>单步模式（逐步学习）</span>
+      </label>
       <label class="toggle">
         <input type="checkbox" v-model="conservative" @change="recompute" />
         <span>保守式扫描（整数误判为引用）</span>
@@ -19,9 +23,20 @@
       </label>
     </div>
 
+    <!-- 单步面板：当前步骤说明 + 控制 -->
+    <div v-if="phase === 'marking' || phase === 'sweeping'" class="step-panel">
+      <div class="step-text">{{ currentStepText || '准备中…' }}</div>
+      <div class="step-controls">
+        <button v-if="stepMode" class="next" @click="nextStep" :disabled="!pendingSteps.length">下一步 ▶</button>
+        <button v-if="stepMode" class="fast" @click="finishSteps">⏩ 自动完成</button>
+      </div>
+    </div>
+
     <div class="status">
       <span class="phase" :class="phase">{{ phaseLabel }}</span>
-      <span v-if="phase === 'marking' || phase === 'sweeping'" class="progress">{{ progressText }}</span>
+      <span v-if="stepMode && (phase === 'marking' || phase === 'sweeping')" class="step-count">
+        步骤 {{ totalSteps - pendingSteps.length + 1 }}/{{ totalSteps }}
+      </span>
       <span class="stat">存活 <b>{{ liveCount }}</b></span>
       <span class="stat">垃圾 <b>{{ garbageCount }}</b></span>
       <span v-if="floatingCount > 0" class="stat floating">浮动垃圾 <b>{{ floatingCount }}</b> ⚠️</span>
@@ -48,6 +63,7 @@
               garbage: o.garbage,
               floating: o.floating,
               misjudged: o.misjudged,
+              active: activeStepObj === o,
               live: phase === 'idle' && o.live && !o.garbage && !o.floating
             }"
           >
@@ -81,10 +97,16 @@ let nextId = 9
 const phase = ref('idle')
 const conservative = ref(true)
 const incremental = ref(false)
+const stepMode = ref(true)
 const allocCount = ref(0)
 const skip = ref(false)
 const log = ref([])
-const progress = ref({ cur: 0, total: 0, label: '' })
+
+// 单步引擎状态
+const pendingSteps = ref([])
+const currentStepText = ref('')
+const activeStepObj = ref(null)
+const totalSteps = ref(0)
 
 const objects = reactive([])
 
@@ -114,10 +136,6 @@ const phaseLabel = computed(() => ({
   sweeping: '清除中…',
   done: '完成',
 }[phase.value]))
-
-const progressText = computed(() =>
-  progress.value.total > 0 ? `${progress.value.label} ${progress.value.cur}/${progress.value.total}` : ''
-)
 
 const liveCount = computed(() => objects.filter(o => !o.garbage).length)
 const garbageCount = computed(() => objects.filter(o => o.garbage).length)
@@ -162,7 +180,6 @@ function reachableFromRoot() {
 }
 
 // 保守式：模拟存活对象里的"整数字段"被误判成引用，指向某些真实垃圾对象
-// 返回被误引的垃圾对象 id 集合
 function simulateMisjudgedRefs(exactReachable) {
   const misjudged = new Set()
   if (!conservative.value) return misjudged
@@ -171,16 +188,12 @@ function simulateMisjudgedRefs(exactReachable) {
   for (const src of survivors) {
     const words = Math.max(1, Math.floor(src.size / 8))
     for (const g of candidates) {
-      // 每个字长有 ~4% 概率恰好"值等于某垃圾地址"
-      if (Math.random() < 0.04 * words) {
-        misjudged.add(g.id)
-      }
+      if (Math.random() < 0.04 * words) misjudged.add(g.id)
     }
   }
   return misjudged
 }
 
-// 保守式可达闭包：误引对象及其 refs 都被视为可达
 function conservativeReachable(base, misjudged) {
   const reach = new Set(base)
   for (const id of misjudged) reach.add(id)
@@ -216,46 +229,24 @@ function recompute() {
 
 const sleep = ms => new Promise(res => setTimeout(res, ms))
 
-// 批量动画：每 tick 处理 batchSize 个对象，总 tick 数有上限，可被 skip 打断
-async function animate(list, prop, tickMs, label) {
-  const N = list.length
-  const batchSize = Math.max(1, Math.ceil(N / 24))   // 最多 ~24 tick
-  const delay = tickMs * (N > 30 ? 0.5 : 1)          // 对象多时自动加速
-  progress.value = { cur: 0, total: N, label }
-  for (let i = 0; i < N; i += batchSize) {
-    if (skip.value) {
-      for (const o of list.slice(i)) o[prop] = true
-      progress.value = { cur: N, total: N, label }
-      break
-    }
-    for (const o of list.slice(i, i + batchSize)) o[prop] = true
-    progress.value = { cur: Math.min(i + batchSize, N), total: N, label }
-    await sleep(delay)
-  }
-  progress.value = { cur: 0, total: 0, label: '' }
-}
+// ============ 单步引擎 ============
 
-async function runGC() {
-  if (phase.value === 'marking' || phase.value === 'sweeping') return
-  skip.value = false
-  phase.value = 'marking'
-  log.value = []
-  addLog('GC 开始')
-
+// 生成 GC 全流程步骤队列（每步含教学文案 + 视觉变化）
+function buildGCSteps() {
+  const steps = []
   for (const o of objects) { o.marked = false; o.garbage = false; o.floating = false; o.misjudged = false }
 
-  // 1) 精确可达（从根）
+  // —— 预计算 ——
   const base = reachableFromRoot()
-  // 2) 保守式模拟误判（只在保守式开启时）
   const misjudged = simulateMisjudgedRefs(base)
-  // 3) 最终可达集合（保守式把误引对象算存活）
   const reach = conservative.value ? conservativeReachable(base, misjudged) : base
-  // 4) 浮动垃圾 = 被误引的真实垃圾（不在 base 里但被保守式当存活）→ 显示为"存活但带徽标"
   const floatingIds = new Set([...misjudged].filter(id => !base.has(id)))
-  // 5) 标记顺序：从根 BFS
+
+  // BFS 标记顺序 + 每个对象的"为什么可达"文案
   const markOrder = []
   const seen = new Set()
   const stack = objects.filter(o => o.fromRoot)
+  const reasonOf = {}
   while (stack.length) {
     const o = stack.pop()
     if (seen.has(o.id)) continue
@@ -263,38 +254,128 @@ async function runGC() {
     markOrder.push(o)
     for (const r of o.refs) {
       const t = objects.find(x => x.id === r)
-      if (t) stack.push(t)
+      if (t && !seen.has(t.id)) {
+        reasonOf[t.id] = o.id
+        stack.push(t)
+      }
     }
   }
-
-  // 标记阶段（增量式时分片）
-  const slices = incremental.value ? 3 : 1
-  const perSlice = Math.max(1, Math.ceil(markOrder.length / slices))
-  for (let s = 0; s < slices; s++) {
-    const chunk = markOrder.slice(s * perSlice, (s + 1) * perSlice)
-    await animate(chunk, 'marked', 240, '标记')
-    if (incremental.value && s < slices - 1) {
-      addLog(`增量暂停（时间片 ${s + 1}/3 用完，~3ms）→ 下一帧继续`)
-      await sleep(600)
-    }
-  }
-  // 误判对象也显示"被标到"（保守式扫描扫到了它们）
-  const misjudgedObjs = objects.filter(o => misjudged.has(o.id))
-  for (const o of misjudgedObjs) o.misjudged = true
-  addLog(`标记完成：${seen.size} 个对象可达` + (conservative.value && misjudged.size > 0 ? `，另有 ${misjudged.size} 个被误判引用` : ''))
-
-  // 清除阶段：只回收 reach 之外的；浮动垃圾保持"存活"但带红标
-  phase.value = 'sweeping'
   const garbage = objects.filter(o => !reach.has(o.id))
-  for (const o of objects) o.floating = floatingIds.has(o.id)
-  await animate(garbage, 'garbage', 220, '清除')
-  const realReclaimed = garbage.length
-  addLog(`清除：回收 ${realReclaimed} 个垃圾对象` + (floatingIds.size > 0 ? `；${floatingIds.size} 个因误判存活（浮动垃圾）` : ''))
 
-  if (floatingCount.value > 0) {
-    addLog('⚠️ 保守式扫描把整数字段误判成引用 → 浮动垃圾本轮收不掉，等下一轮 GC')
+  // —— 生成步骤 ——
+  steps.push({ text: `① GC 开始：从 GC Roots（栈/静态区）出发，找出所有可达对象`, type: 'info' })
+  const rootObj = objects.filter(o => o.fromRoot)
+  for (const o of rootObj) {
+    steps.push({
+      text: `② 根引用：Root → obj${o.id}，obj${o.id} 从根直接可达 → 标记`,
+      type: 'mark', obj: o,
+      apply: () => { o.marked = true }
+    })
+  }
+  for (const o of markOrder) {
+    if (o.fromRoot) continue
+    const via = reasonOf[o.id]
+    steps.push({
+      text: `③ 标记 obj${o.id}：obj${via} 引用它 → 沿引用链传递可达 → 标记`,
+      type: 'mark', obj: o,
+      apply: () => { o.marked = true }
+    })
+  }
+  // 保守式误判（如果有）
+  if (conservative.value && misjudged.size > 0) {
+    const misObjs = objects.filter(o => misjudged.has(o.id))
+    for (const m of misObjs) {
+      const floating = floatingIds.has(m.id)
+      steps.push({
+        text: floating
+          ? `⚠️ 保守式扫描：某存活对象的整数字段值恰好等于 obj${m.id} 的地址 → 被误判为引用（obj${m.id} 实际是垃圾！）`
+          : `⚠️ 保守式扫描：obj${m.id} 被整数字段误判为引用`,
+        type: 'misjudge', obj: m,
+        apply: () => { m.misjudged = true; if (floating) m.floating = true }
+      })
+    }
+  }
+  steps.push({ text: `④ 标记完成：共 ${seen.size} 个对象可达${conservative.value && misjudged.size > 0 ? `（含 ${misjudged.size} 个误判存活）` : ''}`, type: 'info' })
+
+  if (garbage.length > 0) {
+    steps.push({ text: `⑤ 清除阶段开始：未被标记的对象就是垃圾`, type: 'info' })
+    for (const g of garbage) {
+      const floating = floatingIds.has(g.id)
+      steps.push({
+        text: floating
+          ? `⑥ 扫描 obj${g.id}：无引用链 → 是垃圾。⚠️ 但它被误判引用，保守式认为它存活 → 本轮不回收（浮动垃圾）`
+          : `⑥ 扫描 obj${g.id}：无任何可达引用 → 垃圾 → 回收`,
+        type: 'sweep', obj: g,
+        apply: () => { g.garbage = true; if (floating) g.floating = true }
+      })
+    }
+  } else {
+    steps.push({ text: `⑤ 清除阶段：没有垃圾对象，全部存活`, type: 'info' })
+  }
+
+  const realReclaimed = garbage.filter(g => !floatingIds.has(g.id)).length
+  steps.push({
+    text: realReclaimed > 0
+      ? `⑦ GC 完成：回收 ${realReclaimed} 个垃圾对象${floatingIds.size > 0 ? `；${floatingIds.size} 个浮动垃圾留在堆上，下一轮 GC 再处理` : ''}`
+      : (floatingIds.size > 0 ? `⑦ GC 完成：本轮回收 0 个，${floatingIds.size} 个垃圾全被误判存活（浮动垃圾）` : `⑦ GC 完成：本轮没有可回收对象`),
+    type: 'info',
+    apply: () => {
+      if (floatingIds.size > 0) addLog('⚠️ 保守式扫描把整数字段误判成引用 → 浮动垃圾本轮收不掉，等下一轮 GC')
+    }
+  })
+  return steps
+}
+
+async function runGC() {
+  if (phase.value === 'marking' || phase.value === 'sweeping') return
+  skip.value = false
+  log.value = []
+  addLog('GC 开始')
+  phase.value = 'marking'
+  activeStepObj.value = null
+
+  pendingSteps.value = buildGCSteps()
+  totalSteps.value = pendingSteps.value.length
+
+  if (stepMode.value) {
+    // 单步模式：显示第一步，等待用户点"下一步"
+    currentStepText.value = pendingSteps.value[0]?.text || ''
+  } else {
+    // 自动模式：逐条播放
+    await finishSteps()
+  }
+}
+
+// 执行一步（单步模式点击"下一步"，或自动模式逐条调用）
+function execStep(s) {
+  if (s.obj) activeStepObj.value = s.obj
+  if (s.type === 'sweep' && phase.value !== 'sweeping') phase.value = 'sweeping'
+  if (s.type === 'info' && s.text.startsWith('⑤')) phase.value = 'sweeping'
+  if (s.apply) s.apply()
+  // 日志（仅关键步骤）
+  if (s.type === 'misjudge' || (s.type === 'info' && s.text.includes('⑦'))) addLog(s.text.replace(/^[①②③④⑤⑥⑦]\s*/, ''))
+}
+
+function nextStep() {
+  if (!pendingSteps.value.length) return
+  const s = pendingSteps.value.shift()
+  execStep(s)
+  currentStepText.value = pendingSteps.value[0]?.text || ''
+  if (!pendingSteps.value.length) {
+    phase.value = 'done'
+    activeStepObj.value = null
+  }
+}
+
+async function finishSteps() {
+  while (pendingSteps.value.length) {
+    if (skip.value) { pendingSteps.value = []; break }
+    const s = pendingSteps.value.shift()
+    execStep(s)
+    await sleep(stepMode.value ? 120 : 180)
   }
   phase.value = 'done'
+  activeStepObj.value = null
 }
 
 function reset() {
@@ -304,7 +385,10 @@ function reset() {
   objects.length = 0
   nextId = 1
   allocCount.value = 0
-  progress.value = { cur: 0, total: 0, label: '' }
+  pendingSteps.value = []
+  currentStepText.value = ''
+  activeStepObj.value = null
+  totalSteps.value = 0
   seed()
   recompute()
 }
@@ -335,14 +419,38 @@ recompute()
 .controls button.primary { background: #1971c2; color: #fff; border-color: #1971c2; }
 .controls button.skip { background: #f08c00; color: #fff; border-color: #f08c00; }
 .controls button:disabled { opacity: 0.5; cursor: not-allowed; }
-.toggles { display: flex; gap: 18px; margin-bottom: 10px; font-size: 13px; }
+.toggles { display: flex; gap: 18px; margin-bottom: 10px; font-size: 13px; flex-wrap: wrap; }
 .toggle { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.step-panel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: #fff9db;
+  border: 1px solid #f08c00;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+.step-text { font-size: 13px; color: #343a40; line-height: 1.5; flex: 1; }
+.step-controls { display: flex; gap: 8px; flex-shrink: 0; }
+.step-controls button {
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+.step-controls button.next { background: #1971c2; color: #fff; border-color: #1971c2; }
+.step-controls button.fast { background: #f08c00; color: #fff; border-color: #f08c00; }
+.step-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
 .status { display: flex; gap: 14px; margin-bottom: 12px; font-size: 13px; align-items: center; flex-wrap: wrap; }
 .phase { font-weight: 700; padding: 2px 10px; border-radius: 10px; background: #e2e8f0; }
 .phase.marking { background: #ffec99; }
 .phase.sweeping { background: #ffc9c9; }
 .phase.done { background: #b2f2bb; }
-.progress { font-weight: 600; color: #495057; }
+.step-count { font-weight: 600; color: #f08c00; }
 .stat b { color: #1971c2; }
 .stat.floating b { color: #e03131; }
 .heap { display: flex; gap: 16px; }
@@ -374,6 +482,7 @@ recompute()
 .object-card.garbage { opacity: 0.45; border-style: dashed; background: #f1f3f5; filter: grayscale(1); }
 .object-card.floating { opacity: 0.8; border-color: #e03131; background: #fff5f5; filter: none; }
 .object-card.misjudged { box-shadow: 0 0 0 2px rgba(224, 49, 49, 0.25); }
+.object-card.active { outline: 3px solid #1971c2; outline-offset: 2px; transform: scale(1.04); }
 .obj-head { display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; margin-bottom: 5px; }
 .obj-size { color: #94a3b8; font-weight: 400; }
 .obj-refs { font-size: 11px; color: #475569; display: flex; flex-wrap: wrap; gap: 3px; }
