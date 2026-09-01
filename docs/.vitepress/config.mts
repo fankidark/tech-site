@@ -33,6 +33,7 @@ export default withMermaid(defineConfig({
             { text: 'AtomicStack：无锁栈（DCAS/ABA）', link: '/unity-memory/atomic-stack' },
             { text: 'Deallocate：指针如何找回 Allocator', link: '/unity-memory/deallocate' },
             { text: '🧪 托管堆 GC：不分代不压缩 + 模拟器', link: '/unity-memory/managed-heap-gc' },
+            { text: '🧱 class 与 object 的存储结构', link: '/unity-memory/object-layout' },
           ],
         },
       ],
