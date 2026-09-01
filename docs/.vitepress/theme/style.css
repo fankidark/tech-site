@@ -1,0 +1,20 @@
+/* 修复 TOC 点击后滚动条反复上下滚动：
+ * 1) 禁用浏览器滚动锚定（overflow-anchor）——页面异步内容（mermaid 渲染/字体）
+ *    改变布局高度时，Chrome 会自动调整 scrollY 保持"视觉稳定"，表现为滚动条自己上下动
+ * 2) 强制 scroll-behavior: auto —— 防 scrollIntoView / 原生锚点跳转被平滑滚动影响 */
+html {
+  overflow-anchor: none;
+  scroll-behavior: auto !important;
+}
+
+/* 目录容器与正文容器同样禁用（VitePress 默认 html 上有 auto，这里双保险） */
+.VPDoc,
+.VPDocAsideOutline .content,
+.vp-doc {
+  overflow-anchor: none;
+}
+
+/* mermaid 渲染是异步的（空 div → SVG），给占位高度减少布局跳变幅度 */
+.mermaid {
+  min-height: 120px;
+}
