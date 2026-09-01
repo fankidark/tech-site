@@ -277,4 +277,3 @@ static 字段 count;       → klass->static_fields      → GC Root（不随实
 
 - [托管堆 GC：为什么不分代不压缩](./managed-heap-gc) — gc_desc 从哪来、GC 怎么用 bitmap
 - [一次分配的完整旅程](./allocator-journey) — 原生堆侧的对象分配
-- 🧪 [内存布局查看器](./object-layout-sim) — 交互式：选类看内存条逐字节
