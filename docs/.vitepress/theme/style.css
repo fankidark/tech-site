@@ -14,7 +14,20 @@ html {
   overflow-anchor: none;
 }
 
-/* mermaid 渲染是异步的（空 div → SVG），给占位高度减少布局跳变幅度 */
+/* mermaid 现在由构建期预渲染为内联 SVG（.mermaid-pre），
+ * 页面加载即完整布局，无异步渲染。保留 min-height 兜底 + SVG 自适应。 */
 .mermaid {
-  min-height: 120px;
+  min-height: 80px;
+}
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-error {
+  color: #e03131;
+  background: #fff5f5;
+  border: 1px solid #ffc9c9;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
 }
