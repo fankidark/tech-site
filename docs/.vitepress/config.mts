@@ -1,13 +1,11 @@
 import { defineConfig } from 'vitepress'
-import { withMermaid } from 'vitepress-plugin-mermaid'
 import { mermaidPrerender } from './mermaid-prerender'
 
-// mermaid 渲染策略：
-// - dev（npm run dev）：vitepress-plugin-mermaid 运行时渲染（Mermaid.vue）
-// - build（npm run build）：mermaidPrerender 插件用 mmdc（Chromium）预渲染成
-//   内联 SVG → 页面加载即完整布局，零异步布局变化 → TOC 跳转不再漂移
-export default withMermaid(
-  defineConfig({
+// mermaid 渲染策略（dev + build 统一）：
+// mermaidPrerender 插件用 mmdc（Chromium）把 ```mermaid 预渲染成 SVG，
+// base64 存 data-svg 属性；客户端 enhanceApp 在 mount 前解码填充 →
+// 首帧即完整布局，零异步渲染（不再依赖 vitepress-plugin-mermaid 运行时渲染）
+export default defineConfig({
     title: 'TechDeepDive',
     description: '技术细节解析站 — 引擎源码深度解析',
     lang: 'zh-CN',
@@ -55,5 +53,4 @@ export default withMermaid(
         copyright: 'TechDeepDive © 2026',
       },
     },
-  })
-)
+})
