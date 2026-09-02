@@ -105,13 +105,15 @@ export default {
     fillPrerenderedMermaid()
     setupMermaidFold()
     setupMermaidLightbox()
+    // 常驻观察器：SPA 路由切换可能在任意时刻发生（用户浏览首页 10s 后才点进文章），
+    // 固定 8s 断开会导致之后进入的页面图不填充（空 div）。观察器只处理 data-svg
+    // 节点且 fill 有幂等保护（querySelector svg 判重 + removeAttribute），开销可忽略。
     const mo = new MutationObserver(() => {
       fillPrerenderedMermaid()
       setupMermaidFold()
       setupMermaidLightbox()
     })
     mo.observe(document.body, { childList: true, subtree: true })
-    setTimeout(() => mo.disconnect(), 8000)
 
     const originalScrollTo = window.scrollTo.bind(window)
     window.scrollTo = ((arg1: unknown, arg2?: unknown) => {
