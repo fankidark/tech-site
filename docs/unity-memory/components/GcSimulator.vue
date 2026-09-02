@@ -3,9 +3,9 @@
     <div class="controls">
       <button @click="allocObject" :disabled="allocCount >= MAX_OBJS || gcRunning">+ 分配对象</button>
       <button @click="breakRandomRef" :disabled="gcRunning">断开一个引用</button>
-      <button class="primary" @click="runGC" :disabled="phase === 'marking' || phase === 'sweeping'">▶ 运行 GC</button>
+      <button class="primary" @click="runGC" :disabled="(phase === 'marking' || phase === 'sweeping') && !history.length">▶ 运行 GC</button>
       <button v-if="phase === 'marking' || phase === 'sweeping'" class="skip" @click="skip = true">⏩ 跳过</button>
-      <button @click="reset" :disabled="phase === 'marking' || phase === 'sweeping'">重置</button>
+      <button @click="reset" :disabled="false">重置</button>
     </div>
 
     <div class="toggles">
@@ -435,7 +435,8 @@ function buildGCSteps() {
 }
 
 async function runGC() {
-  if (phase.value === 'marking' || phase.value === 'sweeping') return
+  // 回退后 phase 可能停在 marking/sweeping——此时运行按钮允许重新起跑
+  if ((phase.value === 'marking' || phase.value === 'sweeping') && !history.value.length) return
   skip.value = false
   atPause.value = false
   history.value = []
@@ -495,13 +496,30 @@ function nextStep() {
 function prevStep() {
   const snap = history.value.pop()
   if (!snap) return
-  objects.length = 0
-  for (const o of snap.objs) objects.push(o)
+  // 就地恢复（保持对象引用不变！）——步骤的 apply 闭包抓着原对象，
+  // 若用副本替换数组元素，闭包改的是脱离数组的旧对象，视觉状态从此不再刷新
+  const byId = new Map(objects.map(o => [o.id, o]))
+  const snapIds = new Set(snap.objs.map(o => o.id))
+  for (const so of snap.objs) {
+    const o = byId.get(so.id)
+    if (o) {
+      o.refs = [...so.refs]
+      o.marked = so.marked
+      o.garbage = so.garbage
+      o.floating = so.floating
+      o.misjudged = so.misjudged
+      o.fromRoot = so.fromRoot
+    }
+  }
+  // 移除快照之后新分配的对象（增量式时间片间隙里可以分配）
+  for (let i = objects.length - 1; i >= 0; i--) {
+    if (!snapIds.has(objects[i].id)) objects.splice(i, 1)
+  }
   pendingSteps.value = snap.pending
   phase.value = snap.phase
   atPause.value = snap.atPause
   currentStepText.value = snap.text
-  activeStepObj.value = snap.active != null ? objects.find(o => o.id === snap.active) ?? null : null
+  activeStepObj.value = snap.active != null ? byId.get(snap.active) ?? null : null
   // 恢复日志：去掉最后一条（execStep 加的那条）
   if (log.value.length > 0) log.value.shift()
 }
