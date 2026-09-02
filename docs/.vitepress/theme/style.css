@@ -15,9 +15,10 @@ html {
 }
 
 /* mermaid 现在由构建期预渲染为内联 SVG（.mermaid-pre），
- * 页面加载即完整布局，无异步渲染。保留 min-height 兜底 + SVG 自适应。 */
+ * 页面加载即完整布局，无异步渲染。 */
 .mermaid {
   min-height: 80px;
+  text-align: center;
 }
 .mermaid svg {
   max-width: 100%;
@@ -30,4 +31,44 @@ html {
   border-radius: 6px;
   padding: 8px 12px;
   font-size: 12px;
+  text-align: left;
+}
+
+/* 长流程图折叠（>620px 的图默认收起，可点展开）：
+ * 避免超长图把页面撑得很难滚动/首尾看不到 */
+.mermaid-pre {
+  position: relative;
+}
+.mermaid-pre.mermaid-folded {
+  max-height: 480px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.mermaid-pre.mermaid-folded::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 90px;
+  background: linear-gradient(transparent, var(--vp-c-bg));
+  pointer-events: none;
+}
+.mermaid-expand {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  border: 1px solid var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+  background: var(--vp-c-bg);
+  border-radius: 20px;
+  padding: 6px 18px;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.mermaid-expand:hover {
+  background: var(--vp-c-brand-soft);
 }

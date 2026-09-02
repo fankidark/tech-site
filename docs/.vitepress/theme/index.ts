@@ -25,11 +25,33 @@ function fillPrerenderedMermaid() {
   })
 }
 
+// 长流程图折叠：>620px 高的图默认收起 + 「展开完整流程图」按钮
+function setupMermaidFold() {
+  if (typeof document === 'undefined') return
+  document.querySelectorAll<HTMLElement>('.mermaid-pre').forEach((el) => {
+    if (el.dataset.foldDone) return
+    el.dataset.foldDone = '1'
+    const svg = el.querySelector('svg')
+    if (!svg) return
+    const h = svg.getBoundingClientRect().height
+    if (h <= 620) return
+    el.classList.add('mermaid-folded')
+    const btn = document.createElement('button')
+    btn.className = 'mermaid-expand'
+    btn.textContent = `展开完整流程图（高 ${Math.round(h)}px，当前折叠）`
+    btn.addEventListener('click', () => {
+      el.classList.remove('mermaid-folded')
+      btn.remove()
+    })
+    el.appendChild(btn)
+  })
+}
+
 // VitePress 入口是 module 脚本（defer）→ 模块顶层执行时 DOM 已解析完，
 // 此时填充 data-svg → 用户看到首帧就是完整 SVG（enhanceApp 里再兜底一次）
 if (typeof window !== 'undefined') {
-  // 等微任务/首帧前填充：路由首次渲染可能在模块执行后，兜底用 MutationObserver
   fillPrerenderedMermaid()
+  setupMermaidFold()
 }
 
 export default {
@@ -39,7 +61,11 @@ export default {
 
     // 兜底：路由切换/内容更新后再填一次
     fillPrerenderedMermaid()
-    const mo = new MutationObserver(() => fillPrerenderedMermaid())
+    setupMermaidFold()
+    const mo = new MutationObserver(() => {
+      fillPrerenderedMermaid()
+      setupMermaidFold()
+    })
     mo.observe(document.body, { childList: true, subtree: true })
     setTimeout(() => mo.disconnect(), 8000)
 
