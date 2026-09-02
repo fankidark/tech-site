@@ -49,9 +49,9 @@ flowchart LR
     D --> E["不能压缩 ❌"]
     C --> F["无法维护可靠的跨代引用集合"]
     F --> G["不能分代 ❌"]
-    style A fill:#ffc9c9,stroke:#e03131
-    style E fill:#ffc9c9,stroke:#e03131
-    style G fill:#ffc9c9,stroke:#e03131
+    style A fill:#ffc9c9,stroke:#e03131,color:#212529
+    style E fill:#ffc9c9,stroke:#e03131,color:#212529
+    style G fill:#ffc9c9,stroke:#e03131,color:#212529
 ```
 
 **"不分代不压缩"不是 Unity 偷懒，是保守式 GC 的必然结果。**
@@ -177,9 +177,9 @@ flowchart TB
     F -->|"是"| G["AllocateSpec → GC_gcj_malloc<br/>GCJ 描述符模式：对象内引用<b>精确</b>识别"]
     F -->|"否"| H["Allocate → GC_MALLOC<br/>保守模式：整个对象当字节扫"]
     E & G & H --> I["返回指针，构造函数执行"]
-    style E fill:#d0ebff,stroke:#1971c2
-    style G fill:#b2f2bb,stroke:#2f9e44
-    style H fill:#fff3bf,stroke:#f08c00
+    style E fill:#d0ebff,stroke:#1971c2,color:#212529
+    style G fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style H fill:#fff3bf,stroke:#f08c00,color:#212529
 ```
 
 ### ④ 关键深化：GCJ 描述符 = "半精确" GC

@@ -182,9 +182,9 @@ flowchart TB
     L --> N{"重试成功?"}
     N -->|"否"| M
     J & M --> O["写 AllocationHeader → 返回用户指针"]
-    style C fill:#b2f2bb,stroke:#2f9e44
-    style H fill:#fff3bf,stroke:#f08c00
-    style M fill:#ffc9c9,stroke:#e03131
+    style C fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style H fill:#fff3bf,stroke:#f08c00,color:#212529
+    style M fill:#ffc9c9,stroke:#e03131,color:#212529
 ```
 
 ## 与 TLSAllocator 的分工

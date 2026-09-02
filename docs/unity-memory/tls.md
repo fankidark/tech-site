@@ -39,9 +39,9 @@ flowchart TB
     F --> G["sa->Allocate(size, align)<br/>← 栈式分配，无锁"]
     G --> H["帧末尾 → FrameMaintenance(cleanup)"]
     H --> I["sa->Reset()<br/>← 栈顶回退，整体回收"]
-    style C fill:#b2f2bb,stroke:#2f9e44
-    style F fill:#b2f2bb,stroke:#2f9e44
-    style I fill:#ffec99,stroke:#f08c00
+    style C fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style F fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style I fill:#ffec99,stroke:#f08c00,color:#212529
 ```
 
 ```

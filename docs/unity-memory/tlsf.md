@@ -268,10 +268,10 @@ flowchart TB
         B4 --> B5["block_mark_as_free(block)"]
         B5 --> B6["block_insert(control, block)<br/>mapping_insert → 头插 + 置位图"]
     end
-    style A3 fill:#fff3bf,stroke:#f08c00
-    style A4 fill:#b2f2bb,stroke:#2f9e44
-    style B3 fill:#d0ebff,stroke:#1971c2
-    style B4 fill:#d0ebff,stroke:#1971c2
+    style A3 fill:#fff3bf,stroke:#f08c00,color:#212529
+    style A4 fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style B3 fill:#d0ebff,stroke:#1971c2,color:#212529
+    style B4 fill:#d0ebff,stroke:#1971c2,color:#212529
 ```
 
 ```

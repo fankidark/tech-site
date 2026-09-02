@@ -24,9 +24,9 @@ flowchart LR
     end
     K -->|"klass 指针（对象头）"| O1
     K -->|"klass 指针（对象头）"| O2
-    style K fill:#d0ebff,stroke:#1971c2
-    style O1 fill:#b2f2bb,stroke:#2f9e44
-    style O2 fill:#b2f2bb,stroke:#2f9e44
+    style K fill:#d0ebff,stroke:#1971c2,color:#212529
+    style O1 fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style O2 fill:#b2f2bb,stroke:#2f9e44,color:#212529
 ```
 
 **对象头里的 `klass` 指针**就是两者的桥梁：`obj->klass` 让你从任何实例反查它的类型描述符（`obj.GetType()` 的实现）。
@@ -124,9 +124,9 @@ flowchart LR
         A5["vtable[]<br/>柔性数组（方法槽）"]
     end
     A1 --> A2 --> A3 --> A4 --> A5
-    style A1 fill:#d0ebff,stroke:#1971c2
-    style A4 fill:#ffec99,stroke:#f08c00
-    style A5 fill:#b2f2bb,stroke:#2f9e44
+    style A1 fill:#d0ebff,stroke:#1971c2,color:#212529
+    style A4 fill:#ffec99,stroke:#f08c00,color:#212529
+    style A5 fill:#b2f2bb,stroke:#2f9e44,color:#212529
 ```
 
 ### 关键成员详解

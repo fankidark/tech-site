@@ -40,10 +40,10 @@ flowchart TB
     N --> O{"还不够?<br/>(超大分配)"}
     O -->|"是"| P["LargeAlloc 直接走虚拟内存页"]
     J & M & P --> Q["返回 ptr → placement new 构造 Mesh"]
-    style D fill:#a5d8ff,stroke:#1971c2
-    style J fill:#b2f2bb,stroke:#2f9e44
-    style K fill:#fff3bf,stroke:#f08c00
-    style P fill:#ffc9c9,stroke:#e03131
+    style D fill:#a5d8ff,stroke:#1971c2,color:#212529
+    style J fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style K fill:#fff3bf,stroke:#f08c00,color:#212529
+    style P fill:#ffc9c9,stroke:#e03131,color:#212529
 ```
 
 ## 环节 1：`UNITY_NEW` 只是语法糖
