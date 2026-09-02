@@ -34,6 +34,7 @@ export default withMermaid(defineConfig({
             { text: 'Deallocate：指针如何找回 Allocator', link: '/unity-memory/deallocate' },
             { text: '🧪 托管堆 GC：不分代不压缩 + 模拟器', link: '/unity-memory/managed-heap-gc' },
             { text: '🧱 class 与 object 的存储结构', link: '/unity-memory/object-layout' },
+            { text: '🧪 内存布局查看器', link: '/unity-memory/object-layout-sim' },
           ],
         },
       ],
