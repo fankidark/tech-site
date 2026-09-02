@@ -5,7 +5,13 @@ import { mermaidPrerender } from './mermaid-prerender'
 // mermaidPrerender 插件用 mmdc（Chromium）把 ```mermaid 预渲染成 SVG，
 // base64 存 data-svg 属性；客户端 enhanceApp 在 mount 前解码填充 →
 // 首帧即完整布局，零异步渲染（不再依赖 vitepress-plugin-mermaid 运行时渲染）
+
+// GitHub Pages 部署在 fankidark.github.io/tech-site/ 子路径下，
+// CI 环境必须用 /tech-site/ base，否则资源 404；本地 dev 保持 /
+const base = process.env.GITHUB_ACTIONS ? '/tech-site/' : '/'
+
 export default defineConfig({
+    base,
     title: 'TechDeepDive',
     description: '技术细节解析站 — 引擎源码深度解析',
     lang: 'zh-CN',
