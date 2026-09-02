@@ -1,8 +1,8 @@
 <template>
   <div class="gc-sim">
     <div class="controls">
-      <button @click="allocObject" :disabled="allocCount >= MAX_OBJS">+ 分配对象</button>
-      <button @click="breakRandomRef" :disabled="phase === 'marking' || phase === 'sweeping'">断开一个引用</button>
+      <button @click="allocObject" :disabled="allocCount >= MAX_OBJS || gcRunning">+ 分配对象</button>
+      <button @click="breakRandomRef" :disabled="gcRunning">断开一个引用</button>
       <button class="primary" @click="runGC" :disabled="phase === 'marking' || phase === 'sweeping'">▶ 运行 GC</button>
       <button v-if="phase === 'marking' || phase === 'sweeping'" class="skip" @click="skip = true">⏩ 跳过</button>
       <button @click="reset" :disabled="phase === 'marking' || phase === 'sweeping'">重置</button>
@@ -21,6 +21,10 @@
         <input type="checkbox" v-model="incremental" />
         <span>增量式 GC（3ms 时间片 × 3）</span>
       </label>
+      <label class="toggle">
+        <input type="checkbox" v-model="barrier" />
+        <span>写屏障（增量式必需）</span>
+      </label>
     </div>
 
     <!-- 单步面板：当前步骤说明 + 控制 -->
@@ -34,6 +38,8 @@
 
     <div class="status">
       <span class="phase" :class="phase">{{ phaseLabel }}</span>
+      <span v-if="gcRunning" class="stw-badge">⏸ STW 业务暂停</span>
+      <span v-if="atPause" class="inc-badge">⏱ 时间片间隙·可操作</span>
       <span v-if="stepMode && (phase === 'marking' || phase === 'sweeping')" class="step-count">
         步骤 {{ totalSteps - pendingSteps.length + 1 }}/{{ totalSteps }}
       </span>
@@ -97,6 +103,7 @@ let nextId = 9
 const phase = ref('idle')
 const conservative = ref(true)
 const incremental = ref(false)
+const barrier = ref(true)   // 写屏障（增量式正确性依赖；关掉演示漏标 bug）
 const stepMode = ref(true)
 const allocCount = ref(0)
 const skip = ref(false)
@@ -140,6 +147,13 @@ const phaseLabel = computed(() => ({
 const liveCount = computed(() => objects.filter(o => !o.garbage).length)
 const garbageCount = computed(() => objects.filter(o => o.garbage).length)
 const floatingCount = computed(() => objects.filter(o => o.floating).length)
+
+// 业务线程能否操作堆：非增量式 GC 是 STW（全程禁操作）；
+// 增量式在「⏸ 时间片结束」步骤后解禁（atPause 标记当前停在时间片边界）
+const atPause = ref(false)
+const gcRunning = computed(() =>
+  (phase.value === 'marking' || phase.value === 'sweeping') && !atPause.value
+)
 
 function addLog(msg) {
   log.value.unshift(msg)
@@ -323,14 +337,74 @@ function buildGCSteps() {
       if (floatingIds.size > 0) addLog('⚠️ 保守式扫描把整数字段误判成引用 → 浮动垃圾本轮收不掉，等下一轮 GC')
     }
   })
+
+  // ============ 增量式：时间片切分 + 标记中途对象死亡 ============
+  // 非增量：整场 GC 一次跑完（STW），业务线程完全暂停。
+  // 增量式：标记切成 3 个 ≤3ms 时间片，**切片之间业务线程继续跑**——
+  //   用户可以在时间片间隙「断开引用」，被断对象在标记开始后死亡 → 本轮收不掉（浮动垃圾）。
+  //   写屏障保证中途改引用不漏标（三色不变式）；关掉写屏障则演示漏标 bug。
+  if (incremental.value) {
+    const markStepsIdx = steps.length
+    // 找标记类步骤（type mark/misjudge）与首个清除步骤的位置，插入时间片边界
+    const firstSweepIdx = steps.findIndex(s => s.type === 'sweep' || (s.type === 'info' && s.text.startsWith('⑤')))
+    if (firstSweepIdx > 0) {
+      const third = Math.max(1, Math.floor(firstSweepIdx / 3))
+      // 在 1/3、2/3 处插入「时间片结束」步骤（倒序插入避免索引失效）
+      const slices = [
+        { at: firstSweepIdx - third * 2, n: 1 },
+        { at: firstSweepIdx - third, n: 2 },
+      ].filter(s => s.at > 0).sort((a, b) => b.at - a.at)
+      for (const sl of slices) {
+        steps.splice(sl.at, 0, {
+          text: `⏸ 时间片 ${sl.n}/3 用完（≤3ms）→ 交还主线程跑业务帧，标记暂停（Root/白/灰/黑三色状态保持）`,
+          type: 'pause',
+          apply: () => addLog(`⏸ 增量式：时间片 ${sl.n}/3 结束，标记暂停——此刻可以「断开引用」/「分配对象」再点下一步`),
+        })
+      }
+      // 标记完成后（清除阶段开始前）插入「中途死亡」演示步骤
+      const deadCandidates = objects.filter(o => reach.has(o.id) && !o.fromRoot && o.refs.length > 0)
+      if (deadCandidates.length > 0) {
+        const victim = deadCandidates[0]
+        const willFloat = !barrier.value
+        steps.splice(firstSweepIdx + slices.length, 0, {
+          text: willFloat
+            ? `❌ 漏标演示：时间片间隙，业务线程把 obj${victim.id} 的引用全部断开（标记开始后死亡）。没有写屏障 → 该对象已标黑不会被重扫 → 本轮当存活放行 = 浮动垃圾`
+            : `🛡️ 写屏障演示：时间片间隙 obj${victim.id} 的引用被断开。三色不变式 + 写屏障把它重新置灰 → 清除阶段重扫确认死亡 → 正常回收`,
+          type: 'barrier',
+          obj: victim,
+          apply: () => {
+            victim.refs = []
+            if (willFloat) {
+              // 无写屏障：标黑不重扫 → 活着（错误但真实）
+              victim.garbage = false
+              victim.floating = true
+              addLog(`❌ 无写屏障：obj${victim.id} 标记后死亡但已标黑 → 本轮放行（浮动垃圾）`)
+            } else {
+              victim.marked = false
+              victim.garbage = true
+              addLog(`🛡️ 写屏障：obj${victim.id} 重新置灰重扫 → 确认死亡，本轮回收`)
+            }
+          },
+        })
+      }
+      // 开场说明
+      steps.unshift({
+        text: `⏱ 增量式模式：标记切 3 个 ≤3ms 时间片，切片间业务线程照常跑（可断引用/分配）——代价是需要写屏障维持三色不变式`,
+        type: 'info',
+        apply: () => addLog('⏱ 增量式 GC：时间片模式，注意每个 ⏸ 处可以操作对象'),
+      })
+      void markStepsIdx
+    }
+  }
   return steps
 }
 
 async function runGC() {
   if (phase.value === 'marking' || phase.value === 'sweeping') return
   skip.value = false
+  atPause.value = false
   log.value = []
-  addLog('GC 开始')
+  addLog(incremental.value ? 'GC 开始（增量式：3 个时间片，⏸ 处业务线程可操作）' : 'GC 开始（STW：全程暂停业务线程，不能操作对象）')
   phase.value = 'marking'
   activeStepObj.value = null
 
@@ -351,9 +425,12 @@ function execStep(s) {
   if (s.obj) activeStepObj.value = s.obj
   if (s.type === 'sweep' && phase.value !== 'sweeping') phase.value = 'sweeping'
   if (s.type === 'info' && s.text.startsWith('⑤')) phase.value = 'sweeping'
+  // 增量式时间片边界：暂停后业务线程解禁；下一个标记步骤恢复"GC 运行中"
+  if (s.type === 'pause') atPause.value = true
+  else if (atPause.value && (s.type === 'mark' || s.type === 'misjudge' || s.type === 'barrier' || (s.type === 'info' && s.text.startsWith('⑤')))) atPause.value = false
   if (s.apply) s.apply()
   // 日志（仅关键步骤）
-  if (s.type === 'misjudge' || (s.type === 'info' && s.text.includes('⑦'))) addLog(s.text.replace(/^[①②③④⑤⑥⑦]\s*/, ''))
+  if (s.type === 'misjudge' || s.type === 'pause' || s.type === 'barrier' || (s.type === 'info' && (s.text.includes('⑦') || s.text.startsWith('⏱')))) addLog(s.text.replace(/^[①②③④⑤⑥⑦⏱]\s*/, ''))
 }
 
 function nextStep() {
@@ -364,6 +441,7 @@ function nextStep() {
   if (!pendingSteps.value.length) {
     phase.value = 'done'
     activeStepObj.value = null
+    atPause.value = false
   }
 }
 
@@ -372,15 +450,19 @@ async function finishSteps() {
     if (skip.value) { pendingSteps.value = []; break }
     const s = pendingSteps.value.shift()
     execStep(s)
+    // 增量式单步模式下自动播放也要在时间片边界停住（给用户操作窗口）
+    if (stepMode.value && s.type === 'pause') return
     await sleep(stepMode.value ? 120 : 180)
   }
   phase.value = 'done'
   activeStepObj.value = null
+  atPause.value = false
 }
 
 function reset() {
   phase.value = 'idle'
   skip.value = false
+  atPause.value = false
   log.value = []
   objects.length = 0
   nextId = 1
@@ -510,4 +592,6 @@ recompute()
   min-height: 40px;
 }
 .log-line { line-height: 1.6; }
+.stw-badge { background: #fff0f6; color: #c2255c; border: 1px solid #f783ac; border-radius: 10px; padding: 1px 8px; font-size: 11px; }
+.inc-badge { background: #e7f5ff; color: #1971c2; border: 1px solid #74c0fc; border-radius: 10px; padding: 1px 8px; font-size: 11px; }
 </style>
