@@ -28,30 +28,85 @@
 
 ## 内存布局
 
-源码内的 ASCII 布局图（DynamicHeapAllocator.cpp:21-54）：
+源码注释里有一张 ASCII 图（DynamicHeapAllocator.cpp:21-54），它想表达的是三张图：
+**64 位一块 256MB 预留切多个 Pool**、**32 位独立 Pool**、**LargeAlloc 独立大块**。
+ASCII 图在网页上看不清，下面用图+表逐区拆解。
 
+### 64 位（MEMORY_USE_LARGE_BLOCKS=1）：一块 256MB 预留切 N 个 Pool
+
+```mermaid
+flowchart LR
+    subgraph MB["一块 256MB 虚拟预留（MemoryBlock）"]
+        direction LR
+        H["MBInfo<br/>+FreeList"] --- P1["Pool #1<br/>16MB"] --- P2["Pool #2<br/>16MB"] --- P3["Pool #3<br/>16MB"] --- PN["…<br/>共 16 个"]
+    end
+    subgraph Pool1["Pool #1 内部（一个 TLSF 实例）"]
+        direction LR
+        PI1["PI<br/>PoolInfo 头"] --- B1["TLSF 块 x"] --- B2["空闲块 x"] --- B3["TLSF 块 x"] --- B4["空闲块 x"]
+    end
+    P1 -.展开.- Pool1
+    style H fill:#d0ebff,stroke:#1971c2,color:#212529
+    style P1 fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style P2 fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style P3 fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style PN fill:#b2f2bb,stroke:#2f9e44,color:#212529
+    style PI1 fill:#ffec99,stroke:#f08c00,color:#212529
 ```
-64 位（每大块内多个 TLSF Pool）：
-|---------------|---------------|---------------|---------------|
-|MBInfo|FreeList|*  xx       x  |*  x    xxx    |* xxx       xx |
-|* x    x    xx |   x     x     |        x  xx  |     xx    x   |
-|  x         |PI|    xxx     |PI|   xxxxx x  |PI|   xx    xx |PI|
-|---------------|---------------|---------------|---------------|
 
-32 位（独立 TLSF Pool）：
-|----------------------------------------------------------------|
-|  x           xx       xxx   x          x x      x xx        |PI|
-|----------------------------------------------------------------|
+| 区域 | 是什么 | 作用 |
+|---|---|---|
+| `MBInfo` + `FreeList` | MemoryBlockInfo | 管理 256MB 内所有 Pool 的链表头；整块释放时遍历它 |
+| `*`（Pool 起点） | tlsf_pool start | 一个 Pool = 一个独立 TLSF 实例（16MB） |
+| `PI` | PoolInfo | 每个 Pool 的头：allocationCount（空 Pool 检测）等 |
+| `x` | TLSF 块 | 已分配/空闲块，由 Pool 内部 TLSF 位图+链表管理 |
 
-Large Alloc（大块独立分配）：
-|-----------------------------------|
-|LAInfo|xxxxxxxxxxxxxxxxxxxxxxxxxxxx|
-|-----------------------------------|
+**关键点**：256MB 只预留不提交——虚拟地址连续，物理内存按 Pool 实际使用 commit。
+`m_PoolsPerBlock = 256MB / 16MB = 16`，Pool 逐个懒创建（见下文分配流程第 4 步）。
+
+### 32 位（MEMORY_USE_LARGE_BLOCKS=0）：独立 TLSF Pool
+
+```mermaid
+flowchart LR
+    subgraph P32["独立 Pool（256KB 或 64KB 预留粒度）"]
+        direction LR
+        PI32["PI<br/>PoolInfo 头"] --- C1["TLSF 块 x"] --- C2["空闲块 x"] --- C3["TLSF 块 x"]
+    end
+    style PI32 fill:#ffec99,stroke:#f08c00,color:#212529
 ```
 
-- `MBInfo`：MemoryBlockInfo，管理一块 256MB 预留内所有 Pool 的链表
-- `PI`：PoolInfo，每个 TLSF Pool 的头信息
-- `LAInfo`：LargeAllocInfo，大块分配的头信息
+32 位平台预留粒度小（iOS/Switch 256KB、32 位通用 64KB），**装不下"一块切多 Pool"**，
+所以每个 Pool 单独一块预留，没有 MBInfo 层——结构简单但预留次数多。
+
+### LargeAlloc：大块独立分配（≥ Pool/2 的请求）
+
+```mermaid
+flowchart LR
+    subgraph LA["LargeAlloc 块（独立虚拟内存）"]
+        direction LR
+        MBI["MBInfo"] --- LAI1["LAInfo #1"] --- XX1["用户数据 xxx"] --- LAI2["LAInfo #2"] --- XX2["用户数据 xxx"]
+    end
+    style MBI fill:#d0ebff,stroke:#1971c2,color:#212529
+    style LAI1 fill:#ffc9c9,stroke:#e03131,color:#212529
+    style LAI2 fill:#ffc9c9,stroke:#e03131,color:#212529
+```
+
+| 区域 | 是什么 | 作用 |
+|---|---|---|
+| `MBInfo` | 块头 | 挂到 DynamicHeapAllocator 的 LargeAlloc 链表 |
+| `LAInfo` | LargeAllocInfo | 每个大分配的头：size、对齐；free 时直接归还虚拟页 |
+| `x` | 用户数据 | 大块不进 TLSF Pool，**不参与小块碎片** |
+
+**为什么要绕开 TLSF**：一个 8MB 的分配塞进 16MB Pool 会占掉一半，剩下的空间
+碎成没法用的边角料。LargeAlloc 直通虚拟内存页——分配/释放都是整页操作，
+和 Pool 内的小块世界完全隔离（`LAInfo` 混排 = 一个预留块里可以有多个大分配）。
+
+### 对应源码
+
+| 布局 | 源码位置 |
+|---|---|
+| 三张 ASCII 原图 | `DynamicHeapAllocator.cpp:21-54` |
+| LargeAllocInfo / MemoryBlockInfo 结构 | `DynamicHeapAllocator.h:89 / 105` |
+| LargeAlloc 路径 | `DynamicHeapAllocator.cpp:409` 起 |
 
 ## 构造：预留与 TLSF 实例
 
@@ -164,6 +219,8 @@ TLSF 的单 pool 是连续内存段。Unity 用大块虚拟预留 + 多 Pool：
 
 ## 分配流程（图文步骤）
 
+总览图（三条路径：Bucket 快路径 / TLSF 主路径 / LargeAlloc 大块直通）：
+
 ```mermaid
 flowchart TB
     A["Allocate(size, align)"] --> B{"m_BucketAllocator<br/>CanAllocate(size, align)?<br/>≤64B"}
@@ -186,6 +243,75 @@ flowchart TB
     style H fill:#fff3bf,stroke:#f08c00,color:#212529
     style M fill:#ffc9c9,stroke:#e03131,color:#212529
 ```
+
+### 第 1 步：≤64B 走 BucketAllocator 快路径（DynamicHeapAllocator.cpp:409）
+
+```cpp
+// 路径 1：≤64B 走 BucketAllocator（lock-free 桶分配，更快）
+if (m_BucketAllocator != NULL && m_BucketAllocator->CanAllocate(size, align))
+{
+    void* realPtr = m_BucketAllocator->Allocate(size, align);
+    if (realPtr != NULL)
+        return realPtr;
+}
+```
+
+**为什么先查 Bucket**：小对象（≤64B）是游戏里数量最多的分配（组件、小 buffer）。
+BucketAllocator 是纯 lock-free 的定长桶，没有 TLSF 的位图查找开销，几十纳秒返回。
+`CanAllocate` 失败或桶满（返回 NULL）才落到底下两条慢路径——**快路径永远不打扰慢路径**。
+
+### 第 2 步：计算 realSize + 加锁（多线程保护）
+
+```cpp
+// realSize = 用户 size + AllocationHeader 开销 + 对齐
+size_t realSize = AllocationHeader::CalculateNeededAllocationSize(size, align);
+if (m_UseLocking)
+    m_DHAMutex.Lock();   // 多线程版；主线程专用实例免锁
+```
+
+**为什么有锁**：TLSF 本身不是线程安全的。`m_UseLocking` 由构造方决定——
+主线程专用分配器免锁（省一次 syscall 级开销），多线程共享实例必须加 `m_DHAMutex`。
+这和 TLSAllocator 的"每线程一个实例所以无锁"形成对比：**粒度决定锁策略**。
+
+### 第 3 步：`tlsf_memalign` 主路径——O(1) 两级查找
+
+```cpp
+void* ptr = tlsf_memalign(m_TlsfInstance, align, realSize);
+```
+
+**内部发生什么**（对应 [TLSF 算法](./tlsf) 一文）：
+1. `align` 对齐 size → 映射到二级桶：`fl = 31 - CLZ(size)`（一级）、`sl = size >> (fl-8)`（二级）
+2. 位图查"恰好或下一个更大"的空闲块 → 两次位运算定位链表
+3. 摘块 → 若剩余 ≥ 块头+最小块则**分割**，余块挂回对应桶
+
+**确定性 O(1)**：无论堆里有 100 个还是 10 万个空闲块，查找时间恒定——这是 Unity 选
+TLSF 的核心理由（实时性，帧内分配抖动可控）。
+
+### 第 4 步：池未命中 → 懒扩展新 Pool
+
+```cpp
+if (!tlsf 命中 && size < m_RequestedPoolSize / 2)
+{
+    CreateTLSFPool();            // 从 256MB 预留切出一个 16MB Pool
+    tlsf_add_pool(m_TlsfInstance, poolMemory, m_RequestedPoolSize);
+    // 重试 tlsf_memalign
+}
+```
+
+**为什么 size < Pool/2 才扩**：大块（≥ Pool/2）塞进任何 Pool 都会严重碎片化，
+不如直接走 LargeAlloc 独立页。这是"**小块进池、大块绕行**"的碎片隔离策略。
+
+### 第 5 步：写 AllocationHeader → 返回
+
+```cpp
+// 返回的用户指针前面藏着 AllocationHeader（size/allocator 指针），
+// free 时靠它找回 Allocator（见 Deallocate 一文）
+return ptr;
+```
+
+**用户指针 ≠ 块起点**：指针前 16~32B 是 AllocationHeader（记录块大小和所属分配器），
+`free(rawPtr)` 才能反向定位元数据。这三篇正好构成闭环：
+[分配](./dynamic-heap) → [回收](./deallocate) → [算法](./tlsf)。
 
 ## 与 TLSAllocator 的分工
 
