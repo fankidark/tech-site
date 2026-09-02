@@ -31,6 +31,7 @@
     <div v-if="phase === 'marking' || phase === 'sweeping'" class="step-panel">
       <div class="step-text">{{ currentStepText || '准备中…' }}</div>
       <div class="step-controls">
+        <button class="prev" @click="prevStep" :disabled="!history.length || (!pendingSteps.length && phase === 'done' && !history.length)">◀ 上一步</button>
         <button v-if="stepMode" class="next" @click="nextStep" :disabled="!pendingSteps.length">下一步 ▶</button>
         <button v-if="stepMode" class="fast" @click="finishSteps">⏩ 自动完成</button>
       </div>
@@ -41,7 +42,7 @@
       <span v-if="gcRunning" class="stw-badge">⏸ STW 业务暂停</span>
       <span v-if="atPause" class="inc-badge">⏱ 时间片间隙·可操作</span>
       <span v-if="stepMode && (phase === 'marking' || phase === 'sweeping')" class="step-count">
-        步骤 {{ totalSteps - pendingSteps.length + 1 }}/{{ totalSteps }}
+        步骤 {{ totalSteps - pendingSteps.length }}/{{ totalSteps }}
       </span>
       <span class="stat">存活 <b>{{ liveCount }}</b></span>
       <span class="stat">垃圾 <b>{{ garbageCount }}</b></span>
@@ -114,6 +115,7 @@ const pendingSteps = ref([])
 const currentStepText = ref('')
 const activeStepObj = ref(null)
 const totalSteps = ref(0)
+const history = ref([])   // 快照栈：每步执行前的完整状态（支持「上一步」）
 
 const objects = reactive([])
 
@@ -361,31 +363,64 @@ function buildGCSteps() {
           apply: () => addLog(`⏸ 增量式：时间片 ${sl.n}/3 结束，标记暂停——此刻可以「断开引用」/「分配对象」再点下一步`),
         })
       }
-      // 标记完成后（清除阶段开始前）插入「中途死亡」演示步骤
+      // 标记完成后（清除阶段开始前）插入「中途死亡」演示步骤（写屏障/漏标分步讲解）
       const deadCandidates = objects.filter(o => reach.has(o.id) && !o.fromRoot && o.refs.length > 0)
       if (deadCandidates.length > 0) {
         const victim = deadCandidates[0]
         const willFloat = !barrier.value
-        steps.splice(firstSweepIdx + slices.length, 0, {
-          text: willFloat
-            ? `❌ 漏标演示：时间片间隙，业务线程把 obj${victim.id} 的引用全部断开（标记开始后死亡）。没有写屏障 → 该对象已标黑不会被重扫 → 本轮当存活放行 = 浮动垃圾`
-            : `🛡️ 写屏障演示：时间片间隙 obj${victim.id} 的引用被断开。三色不变式 + 写屏障把它重新置灰 → 清除阶段重扫确认死亡 → 正常回收`,
-          type: 'barrier',
-          obj: victim,
-          apply: () => {
-            victim.refs = []
-            if (willFloat) {
-              // 无写屏障：标黑不重扫 → 活着（错误但真实）
+        // 通用链路：标记开始 → 时间片间隙死亡 → 恢复标记 → 结局
+        // 结合真实源码链（2020 LTS 实证）：
+        //   il2cpp 写引用 = WriteBarrier::GenericStore (gc/WriteBarrier.cpp:6)
+        //     → BoehmGC.cpp:205 SetWriteBarrier → GC_END_STUBBORN_CHANGE(ptr)
+        //     → mallocx.c:614 GC_end_stubborn_change → GC_dirty(p)（标记所在页为脏页）
+        //     → os_dep.c:3078 GC_dirty_inner: async_set_pht_entry_from_index(GC_dirty_pages, PHT_HASH(p))
+        //   GC 恢复时: mark.c:266 GC_initiate_gc → GC_read_dirty 收脏页
+        //     → mark.c:338 MS_PUSH_RESCUERS: GC_push_next_marked_dirty 只扫脏页上已标黑对象
+        //     → 标黑后死亡的对象若有新写入（脏页）→ 重扫其引用 → 死亡可见 → 正确回收
+        if (willFloat) {
+          steps.push({
+            text: `❌ 漏标演示 [1/2]：时间片间隙，业务线程把 obj${victim.id} 的引用断开（标记开始后才死亡）。此刻 obj${victim.id} 已经标黑——三色标记的规矩是"黑不再扫"`,
+            type: 'barrier', obj: victim,
+            apply: () => {
+              victim.refs = []
+              addLog(`⏱ 时间片间隙：obj${victim.id} 的引用被业务线程断开（标记开始后死亡）`)
+            },
+          })
+          steps.push({
+            text: `❌ 漏标演示 [2/2]：没有写屏障记录这次变化 → 恢复标记时 GC 不会重扫 obj${victim.id}（它不在任何脏页上）→ 本轮当存活放行 = 浮动垃圾。真实代码：漏掉 WriteBarrier::GenericStore 这一步，GC_dirty 永远不会被调`,
+            type: 'barrier', obj: victim,
+            apply: () => {
               victim.garbage = false
               victim.floating = true
-              addLog(`❌ 无写屏障：obj${victim.id} 标记后死亡但已标黑 → 本轮放行（浮动垃圾）`)
-            } else {
+              addLog(`❌ 无写屏障：obj${victim.id} 标黑后死亡 → 无脏页记录 → 不重扫 → 本轮放行（浮动垃圾）`)
+            },
+          })
+        } else {
+          steps.push({
+            text: `🛡️ 写屏障 [1/3]：时间片间隙，业务线程把 obj${victim.id} 的引用断开。虽然对象已标黑，但刚才"改引用"这个动作本身留了痕——看代码：`,
+            type: 'barrier', obj: victim,
+            apply: () => {
+              victim.refs = []
+              addLog(`⏱ 时间片间隙：obj${victim.id} 的引用被业务线程断开（标记开始后死亡）`)
+            },
+          })
+          steps.push({
+            text: `🛡️ 写屏障 [2/3]：il2cpp 写引用必经 WriteBarrier::GenericStore (WriteBarrier.cpp:6)：先 *(void**)ptr = value 再 SetWriteBarrier(ptr) → BoehmGC.cpp:205 GC_END_STUBBORN_CHANGE → mallocx.c:616 GC_dirty(p) → os_dep.c:3078 把 obj 所在页记进 GC_dirty_pages 脏页表`,
+            type: 'barrier', obj: victim,
+            apply: () => {
+              addLog('🛡️ 写屏障：改引用的内存页被记入 GC_dirty_pages（脏页表）')
+            },
+          })
+          steps.push({
+            text: `🛡️ 写屏障 [3/3]：GC 恢复标记（mark.c:331 MS_PUSH_RESCUERS）只扫脏页：GC_push_next_marked_dirty → obj${victim.id} 所在页是脏的 → 重扫发现引用已断 → 置灰重标 → 清除阶段确认死亡回收。三色不变式补上了`,
+            type: 'barrier', obj: victim,
+            apply: () => {
               victim.marked = false
               victim.garbage = true
-              addLog(`🛡️ 写屏障：obj${victim.id} 重新置灰重扫 → 确认死亡，本轮回收`)
-            }
-          },
-        })
+              addLog(`🛡️ 写屏障：恢复标记重扫脏页 → obj${victim.id} 重新置灰 → 确认死亡，本轮回收`)
+            },
+          })
+        }
       }
       // 开场说明
       steps.unshift({
@@ -403,6 +438,7 @@ async function runGC() {
   if (phase.value === 'marking' || phase.value === 'sweeping') return
   skip.value = false
   atPause.value = false
+  history.value = []
   log.value = []
   addLog(incremental.value ? 'GC 开始（增量式：3 个时间片，⏸ 处业务线程可操作）' : 'GC 开始（STW：全程暂停业务线程，不能操作对象）')
   phase.value = 'marking'
@@ -436,6 +472,16 @@ function execStep(s) {
 function nextStep() {
   if (!pendingSteps.value.length) return
   const s = pendingSteps.value.shift()
+  // 执行前拍快照（对象状态 + 剩余步骤 + 阶段）→ 供「上一步」回退
+  history.value.push({
+    objs: objects.map(o => ({ ...o, refs: [...o.refs] })),
+    pending: pendingSteps.value.map(x => x),
+    phase: phase.value,
+    atPause: atPause.value,
+    text: currentStepText.value,
+    active: activeStepObj.value?.id ?? null,
+  })
+  if (history.value.length > 80) history.value.shift()
   execStep(s)
   currentStepText.value = pendingSteps.value[0]?.text || ''
   if (!pendingSteps.value.length) {
@@ -443,6 +489,21 @@ function nextStep() {
     activeStepObj.value = null
     atPause.value = false
   }
+}
+
+// 回退到上一步执行前的状态（可反复按，一直退到 GC 开始）
+function prevStep() {
+  const snap = history.value.pop()
+  if (!snap) return
+  objects.length = 0
+  for (const o of snap.objs) objects.push(o)
+  pendingSteps.value = snap.pending
+  phase.value = snap.phase
+  atPause.value = snap.atPause
+  currentStepText.value = snap.text
+  activeStepObj.value = snap.active != null ? objects.find(o => o.id === snap.active) ?? null : null
+  // 恢复日志：去掉最后一条（execStep 加的那条）
+  if (log.value.length > 0) log.value.shift()
 }
 
 async function finishSteps() {
@@ -463,6 +524,7 @@ function reset() {
   phase.value = 'idle'
   skip.value = false
   atPause.value = false
+  history.value = []
   log.value = []
   objects.length = 0
   nextId = 1
@@ -500,6 +562,8 @@ recompute()
 .controls button:hover:not(:disabled) { background: #f1f5f9; }
 .controls button.primary { background: #1971c2; color: #fff; border-color: #1971c2; }
 .controls button.skip { background: #f08c00; color: #fff; border-color: #f08c00; }
+.controls button.prev { background: #495057; color: #fff; border-color: #495057; }
+.controls button.prev:disabled { opacity: 0.45; cursor: not-allowed; }
 .controls button:disabled { opacity: 0.5; cursor: not-allowed; }
 .toggles { display: flex; gap: 18px; margin-bottom: 10px; font-size: 13px; flex-wrap: wrap; }
 .toggle { display: flex; align-items: center; gap: 5px; cursor: pointer; }
