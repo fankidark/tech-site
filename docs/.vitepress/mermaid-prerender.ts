@@ -35,6 +35,7 @@ function renderWithMmdc(code: string, index: number): string {
     const inFile = path.join(dir, `g${index}.mmd`)
     const outFile = path.join(dir, `g${index}.svg`)
     const cfgFile = path.join(dir, 'puppeteer.json')
+    const mmCfgFile = path.join(dir, 'mermaid-config.json')
     writeFileSync(inFile, code, 'utf8')
     writeFileSync(
       cfgFile,
@@ -43,17 +44,48 @@ function renderWithMmdc(code: string, index: number): string {
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       })
     )
-    const res = spawnSync(mmdcBin, ['-i', inFile, '-o', outFile, '-p', cfgFile, '-q'], {
-      timeout: 60000,
-      encoding: 'utf8',
-    })
+    // 中文字体优先（防测量/渲染回退 DejaVu 导致乱码）+ 放宽标签换行 + 加大字号
+    writeFileSync(
+      mmCfgFile,
+      JSON.stringify({
+        startOnLoad: false,
+        theme: 'neutral',
+        securityLevel: 'loose',
+        flowchart: { htmlLabels: true, wrappingWidth: 320 },
+        themeVariables: {
+          fontSize: '18px',
+          fontFamily:
+            '"Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", "WenQuanYi Zen Hei", sans-serif',
+        },
+      })
+    )
+    const res = spawnSync(
+      mmdcBin,
+      ['-i', inFile, '-o', outFile, '-p', cfgFile, '-c', mmCfgFile, '-q'],
+      {
+        timeout: 60000,
+        encoding: 'utf8',
+      }
+    )
     if (res.status !== 0) {
       throw new Error((res.stderr || res.stdout || 'mmdc failed').slice(0, 300))
     }
-    const svg = readFileSync(outFile, 'utf8')
+    let svg = readFileSync(outFile, 'utf8')
     const m = svg.match(/<svg[\s\S]*?<\/svg>/)
     if (!m) throw new Error('mmdc 输出无 svg')
-    return m[0]
+    svg = m[0]
+    // 宽图不再压扁：写死自然尺寸（width/height = viewBox），
+    // 容器 overflow-x 横向滚动，文字保持矢量清晰；窄图居中正常显示
+    const vb = svg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/)
+    if (vb) {
+      const w = Math.round(parseFloat(vb[1]))
+      const h = Math.round(parseFloat(vb[2]))
+      svg = svg
+        .replace(/width="100%"/, `width="${w}"`)
+        .replace(/style="max-width:[^;"]*;?/, `style="`)
+      svg = svg.replace('<svg ', `<svg preserveAspectRatio="xMidYMid meet" data-natural-w="${w}" data-natural-h="${h}" `)
+    }
+    return svg
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

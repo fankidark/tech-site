@@ -20,9 +20,17 @@ html {
   min-height: 80px;
   text-align: center;
 }
-.mermaid svg {
-  max-width: 100%;
-  height: auto;
+/* 宽图不压扁：容器横向滚动；SVG 保持自然尺寸（文字矢量清晰） */
+.mermaid-pre {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  cursor: zoom-in;
+}
+.mermaid-pre svg {
+  max-width: none;
+  margin: 0 auto;
+  display: block;
 }
 .mermaid-error {
   color: #e03131;
@@ -32,17 +40,56 @@ html {
   padding: 8px 12px;
   font-size: 12px;
   text-align: left;
+  cursor: default;
+}
+
+/* 全屏查看（点击图打开）：浅色底 + 深色文字，保证可读 */
+.mermaid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(255, 255, 255, 0.96);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px 72px;
+  cursor: zoom-out;
+}
+.mermaid-lightbox .mmlb-scroll {
+  overflow: auto;
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 16px;
+}
+.mermaid-lightbox svg {
+  max-width: none;
+  max-height: none;
+}
+.mermaid-lightbox .mmlb-hint {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #495057;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 14px;
+  border-radius: 14px;
+  border: 1px solid #dee2e6;
+  white-space: nowrap;
 }
 
 /* 长流程图折叠（>620px 的图默认收起，可点展开）：
  * 避免超长图把页面撑得很难滚动/首尾看不到 */
-.mermaid-pre {
-  position: relative;
-}
 .mermaid-pre.mermaid-folded {
   max-height: 480px;
   overflow: hidden;
   border-radius: 8px;
+  cursor: default;
 }
 .mermaid-pre.mermaid-folded::after {
   content: '';

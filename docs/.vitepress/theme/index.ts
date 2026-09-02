@@ -8,13 +8,20 @@ import './style.css'
 // 2) Element.scrollIntoView({ behavior: 'smooth' }) → 强制 auto（组件/路由滚动）
 // 3) mermaid 图在构建期由 mermaid-prerender 预渲染成 SVG（base64 存 data-svg），
 //    这里在 app.mount 之前解码填充 → 首帧即完整布局，零异步渲染、零布局抖动
+// base64 → UTF-8 字符串：atob() 返回 Latin-1 串，多字节 UTF-8 必须逐字节还原，
+// 否则中文全部变乱码（ç¬ç« 之类）。TextDecoder 按字节流解码是标准做法。
+function b64ToUtf8(b64: string): string {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
 function fillPrerenderedMermaid() {
   if (typeof document === 'undefined') return
   document.querySelectorAll<HTMLElement>('.mermaid-pre[data-svg]').forEach((el) => {
     const b64 = el.getAttribute('data-svg')
     if (!b64) return
     try {
-      const svg = atob(b64)
+      const svg = b64ToUtf8(b64)
       if (!el.querySelector('svg')) {
         el.innerHTML = svg
       }
@@ -22,6 +29,40 @@ function fillPrerenderedMermaid() {
     } catch (e) {
       console.error('[mermaid] 解码失败:', e)
     }
+  })
+}
+
+// 全屏查看：点击图打开 lightbox（浅色底+原始尺寸，可拖动滚动），Esc/点击关闭
+function setupMermaidLightbox() {
+  if (typeof document === 'undefined') return
+  document.querySelectorAll<HTMLElement>('.mermaid-pre').forEach((el) => {
+    if (el.dataset.lbDone) return
+    el.dataset.lbDone = '1'
+    el.title = '点击全屏查看'
+    el.addEventListener('click', (ev) => {
+      // 折叠状态下点的是展开按钮，不弹 lightbox
+      if (el.classList.contains('mermaid-folded')) return
+      const svg = el.querySelector('svg')
+      if (!svg) return
+      const lb = document.createElement('div')
+      lb.className = 'mermaid-lightbox'
+      const scroll = document.createElement('div')
+      scroll.className = 'mmlb-scroll'
+      scroll.appendChild(svg.cloneNode(true))
+      lb.appendChild(scroll)
+      const hint = document.createElement('div')
+      hint.className = 'mmlb-hint'
+      hint.textContent = '滚动/拖动查看 · 点击任意处或按 Esc 关闭'
+      lb.appendChild(hint)
+      lb.addEventListener('click', () => lb.remove())
+      document.addEventListener('keydown', function esc(e) {
+        if (e.key === 'Escape') {
+          lb.remove()
+          document.removeEventListener('keydown', esc)
+        }
+      })
+      document.body.appendChild(lb)
+    })
   })
 }
 
@@ -52,6 +93,7 @@ function setupMermaidFold() {
 if (typeof window !== 'undefined') {
   fillPrerenderedMermaid()
   setupMermaidFold()
+  setupMermaidLightbox()
 }
 
 export default {
@@ -62,9 +104,11 @@ export default {
     // 兜底：路由切换/内容更新后再填一次
     fillPrerenderedMermaid()
     setupMermaidFold()
+    setupMermaidLightbox()
     const mo = new MutationObserver(() => {
       fillPrerenderedMermaid()
       setupMermaidFold()
+      setupMermaidLightbox()
     })
     mo.observe(document.body, { childList: true, subtree: true })
     setTimeout(() => mo.disconnect(), 8000)
