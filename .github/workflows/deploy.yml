@@ -24,10 +24,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      # enablement: true → 自动为仓库启用 Pages（无需手动去 settings 开）
+      # 注意：不要用 enablement:true —— GITHUB_TOKEN 无权限自动启用 Pages，
+      # 会导致 CI 在 configure-pages 步骤报 "Resource not accessible by integration"。
+      # Pages 只需手动开启一次（Settings→Pages→Source: GitHub Actions），之后每次 push 自动部署。
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - run: npm ci
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
