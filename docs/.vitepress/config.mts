@@ -48,9 +48,11 @@ export default defineConfig({
               { text: '🧪 内存布局查看器', link: '/unity-memory/object-layout-sim' },
             ],
           },
+        ],
+        '/hot-update/': [
           {
             text: '热更新差分（HDiffPatch）',
-            collapsed: true,
+            collapsed: false,
             items: [
               { text: '总览：原理与全链路', link: '/hot-update/' },
               { text: 'cover：差量的核心数据结构', link: '/hot-update/hdiff-cover' },
