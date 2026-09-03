@@ -56,6 +56,7 @@ flowchart TB
 2. **[diff 生成：cover 搜索与序列化](./hdiff-generate)** —— 后缀数组匹配、收益模型、HDIFFSF20/HDIFF13 两种格式
 3. **[patch 应用：新文件如何被重建](./hdiff-patch)** —— gap 拷贝 + 残差加法、step 流式消费、运行时安全检查
 4. **[实战例子：手推一遍 diff 与 patch](./hdiff-example)** —— 18 字节 → 15 字节，逐步重放
-5. **[项目落地：Unity 热更中的完整链路](./hdiff-unity)** —— C# HDiffManager/Lua 状态机/native 库三层如何协作
-6. **[打包与合并：patch 的完整生命周期](./hdiff-pipeline)** —— 打包机侧生成/发布流程 + 客户端差异计算/下载/合并/校验修复回合
-7. **[安全与踩坑](./hdiff-security)** —— 路径穿越、内存 DoS、OPENREAD_ERROR 排查实录
+5. **[小文件与小重复：为什么没生成 diff](./hdiff-minmatch)** —— kMinMatchLen/收益模型/_select_cover 终审 + 7 组实测
+6. **[项目落地：Unity 热更中的完整链路](./hdiff-unity)** —— C# HDiffManager/Lua 状态机/native 库三层如何协作
+7. **[打包与合并：patch 的完整生命周期](./hdiff-pipeline)** —— 打包机侧生成/发布流程 + 客户端差异计算/下载/合并/校验修复回合
+8. **[安全与踩坑](./hdiff-security)** —— 路径穿越、内存 DoS、OPENREAD_ERROR 排查实录

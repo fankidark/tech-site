@@ -59,6 +59,7 @@ export default defineConfig({
               { text: 'diff 生成：cover 搜索与序列化', link: '/hot-update/hdiff-generate' },
               { text: 'patch 应用：新文件重建', link: '/hot-update/hdiff-patch' },
               { text: '实战例子：手推 diff 与 patch', link: '/hot-update/hdiff-example' },
+              { text: '小文件与小重复：为什么没生成 diff', link: '/hot-update/hdiff-minmatch' },
               { text: '项目落地：Unity 热更链路', link: '/hot-update/hdiff-unity' },
               { text: '打包与合并：patch 的完整生命周期', link: '/hot-update/hdiff-pipeline' },
               { text: '安全与踩坑（OPENREAD 实录）', link: '/hot-update/hdiff-security' },
