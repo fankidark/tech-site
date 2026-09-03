@@ -1,14 +1,28 @@
 # 🧪 diff 生成 & patch 应用 · 单步调试模拟器
 
-> 双模式单步调试：**diff 生成**（怎么决定哪些重复值得存）+ **patch 应用**（hpatchz 怎么用 old+patch 重建 new）。
+> 双模式单步调试：**diff 生成**（怎么决定哪些重复值得存）+ **patch 应用**（hpatchz 怎么用 old+patch 重建 new）+ **匹配查找可视化**（后缀数组二分怎么一步步找到匹配）。
 > 每步附源码对照（文件:行号）+ **patch 二进制结构表**（每段字节 hex 可见）。
 > 算法忠实翻译自 `HDiffPatch v4.12.1`（kMinMatchLen=5、初审 score≥2、终审 score≥4、7bit packUInt）。
 
 <script setup>
 import HDiffSimulator from './components/HDiffSimulator.vue'
+import MatchSearchSimulator from './components/MatchSearchSimulator.vue'
 </script>
 
 <HDiffSimulator />
+
+## 🔍 匹配查找算法 · 动态演示
+
+diff 主流程里每次 `getBestMatch` 内部发生了什么？下面这个独立可视化把**后缀数组二分 + 左右探测**逐步放给你看：
+
+<MatchSearchSimulator />
+
+**三阶段**：
+1. **后缀数组全景**——old 的所有后缀按字典序排列（SA[i]=第 i 小后缀起点），二分区间用颜色标出
+2. **二分逐步**——每步显示中点后缀 vs 查询串的逐字符比较结果：公共前缀几个字符、首个差异是谁、区间往左还是往右丢一半（对应 `suffix_string.cpp:155 _lower_bound`，含 left_eq/right_eq 缓存优化）
+3. **左右探测**——二分命中位 sai 之后，`getBestMatch`（diff.cpp:174-206）从 sai 和 sai−1 各取一个候选，`getEqualLength` 算实际匹配长度取最长——查询串与命中串逐字符对齐显示，绿=匹配区
+
+<!-- 分隔：主模拟器说明 -->
 
 ## 它会判断吗？——会，而且是三道闸门
 
