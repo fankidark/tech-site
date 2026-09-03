@@ -29,8 +29,10 @@ export default defineConfig({
         { text: 'Unity 内存管理', link: '/unity-memory/' },
         { text: 'GitHub', link: 'https://github.com/fankidark/tech-site' },
       ],
+      // 全站统一侧栏：所有技术页面共享同一份目录，随时跳转任意系列
+      // （VitePress sidebar 多 key 按前缀匹配，这里用 '/' 兜底 key 覆盖全部页面）
       sidebar: {
-        '/unity-memory/': [
+        '/': [
           {
             text: 'Unity 内存管理分配细节',
             collapsed: false,
@@ -48,8 +50,6 @@ export default defineConfig({
               { text: '🧪 内存布局查看器', link: '/unity-memory/object-layout-sim' },
             ],
           },
-        ],
-        '/hot-update/': [
           {
             text: '热更新差分（HDiffPatch）',
             collapsed: false,
