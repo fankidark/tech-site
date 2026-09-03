@@ -1,8 +1,8 @@
-# 🧪 diff 生成 · 单步调试模拟器
+# 🧪 diff 生成 & patch 应用 · 单步调试模拟器
 
-> 动手体验 HDiffPatch 怎么"决定哪些重复内容值得生成 diff 数据"：
-> **搜索 → 收益裁决 → 接龙合并 → gap/cover 序列化 → 最终账单**，每步附源码对照（文件:行号）。
-> 算法忠实翻译自 `HDiffPatch v4.12.1` 的 `diff.cpp`（常量与源码一致：kMinMatchLen=5、初审 score≥2、终审 score≥4）。
+> 双模式单步调试：**diff 生成**（怎么决定哪些重复值得存）+ **patch 应用**（hpatchz 怎么用 old+patch 重建 new）。
+> 每步附源码对照（文件:行号）+ **patch 二进制结构表**（每段字节 hex 可见）。
+> 算法忠实翻译自 `HDiffPatch v4.12.1`（kMinMatchLen=5、初审 score≥2、终审 score≥4、7bit packUInt）。
 
 <script setup>
 import HDiffSimulator from './components/HDiffSimulator.vue'
@@ -24,25 +24,32 @@ import HDiffSimulator from './components/HDiffSimulator.vue'
 
 ## 使用建议（按学习顺序）
 
-1. **默认输入直接跑**：`AAAABBBB...` 8 字节重复——你会看到它过闸门、形成 cover
-2. **复现你的实验**：把重复片段改成 4 字节（如 `ABCD`），观察"②隐形"直接跳过
-3. **看收益裁决**：改成 6 字节重复但放得很孤立，观察"③拒绝"（成本算给你看）
-4. **看接龙**：放两段相近的重复（中间隔 2~3 字节），观察"④tryLinkExtend"合并成一条、只付一次入场费
-5. **看最终账单**：最后一步把 patch 拆成 头部+控制流+newDataDiff+残差，和 new 比较——小文件会看到 ⚠️ "不划算，应走全量"
+1. **默认输入直接跑 diff**：`AAAABBBB...` 8 字节重复——看它过闸门、形成 cover
+2. **看二进制结构**：序列化步骤后，下方**patch 二进制结构表**逐段给出偏移/长度/hex 字节（类型串→头→covers→rle→newDataDiff）
+3. **切 patch 应用模式**：点「▶ patch 应用步骤」，同一份 patch 二进制被 hpatchz 逐步消费——读类型串→反解头→解码 cover→gap 拷贝（copyFromClip）→残差加法（`out[i]=old[i]+sub[i]`）→flush 终检
+4. **复现你的实验**：改成 4 字节重复（②隐形）、6 字节孤立（③拒绝）、相邻两段（④接龙）
+5. **重置**：🔄 按钮恢复默认输入并清空全部状态
+6. **对照源码**：每步的 📄 行号都可在 `/mnt/c/References/haru_hdiff/HDiffPatchv4_12_1/` 逐字验证
 
 ## 对照表：模拟器 ↔ 源码
 
 | 模拟器步骤 | 源码 | 说明 |
 |---|---|---|
-| 生成候选匹配 | `getBestMatch` (diff.cpp:149) | 教学版朴素搜索；真实实现 = 后缀数组 lower_bound + 左右探测 2 个候选 |
+| 生成候选匹配 | `getBestMatch` (diff.cpp:149) | 教学版朴素搜索；真实实现 = 后缀数组 lower_bound + 左右探测 |
 | 长度门槛 | diff.cpp:158/319 | kMinMatchLen=5，短匹配"隐形" |
 | 收益裁决 | diff.cpp:323 | `len − getCoverCtrlCost ≥ kMinMatchScore` |
-| 接龙合并 | `tryLinkExtend` (diff.cpp:229) | 间隙 ≤511B 时合并，省一条 cover 的入场费 |
-| 共线合并 | `tryCollinear` (diff.cpp:279) | old/new 成比例推进的匹配直接合并 |
-| 终审删除 | `_select_cover` (diff.cpp:345) | TCompressDetect 压缩率模型（CLI 默认 score≥4） |
-| gap 序列化 | `TNewDataDiffStream` (stream_serialize.cpp:198) | 无分隔符连续存储，patch 端按 cover 边界切 |
-| 残差序列化 | `_subData` (stream_serialize.cpp:312) + rle0 (patch.c:2192) | new−old 模 256，全 0 段只存长度 |
-| 最终账单 | `serialize_compressed_diff` (diff.cpp:1269-1286) | HDIFF13 头部 + 4 段数据 |
+| 接龙合并 | `tryLinkExtend` (diff.cpp:229) | 间隙 ≤511B 时合并，省一条 cover 入场费 |
+| 终审删除 | `_select_cover` (diff.cpp:345) | 压缩率模型（CLI 默认 score≥4） |
+| 序列化布局 | `serialize_compressed_diff` (diff.cpp:1269-1286) | 类型串→10 个 packUInt→covers→rle→newDataDiff |
+| 读类型串/头 | `getSingleCompressedDiffInfo` (patch.c:2111/2136-2146) | patch 端按同序反解 |
+| gap 拷贝 | patch.c:2505 `copyFromClip` | 边界 = cover.newPos−lastNewEnd，newDataDiff 无分隔符 |
+| 残差加法 | patch.c:2244 `_patch_add_old_with_rle0` → :2192 `_rle0_decoder_add` | `out[i]=(old[i]+sub[i]) mod 256`，全 0 匹配只花长度字节 |
+| step loop | patch.c:2471 | cover 逐条消费 + gap 填充 |
+| flush 终检 | patch.c:2534-2542 | inClip 消费完 && outCache 写完 && coverCount==0 |
+
+## 正确性保证
+
+模拟器内建的 patch 编码器与解码器互为镜像——**应用模式跑完，重建结果与输入 new 逐字节一致**（三组场景实测验证：8B 重复 / 5B 重复 / 445B→69B 长重复）。你看到的每一步就是真实的合并逻辑，不是动画示意。
 
 ## 与实测实验互证
 
