@@ -26,7 +26,6 @@ export default defineConfig({
     themeConfig: {
       nav: [
         { text: '首页', link: '/' },
-        { text: 'Unity 内存管理', link: '/unity-memory/' },
         { text: 'GitHub', link: 'https://github.com/fankidark/tech-site' },
       ],
       // 全站统一侧栏：所有技术页面共享同一份目录，随时跳转任意系列
