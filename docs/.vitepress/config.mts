@@ -54,6 +54,7 @@ export default defineConfig({
             collapsed: false,
             items: [
               { text: '总览：原理与全链路', link: '/hot-update/' },
+              { text: '🧪 diff 生成 · 单步调试模拟器', link: '/hot-update/hdiff-sim' },
               { text: 'cover：差量的核心数据结构', link: '/hot-update/hdiff-cover' },
               { text: 'diff 生成：cover 搜索与序列化', link: '/hot-update/hdiff-generate' },
               { text: 'patch 应用：新文件重建', link: '/hot-update/hdiff-patch' },

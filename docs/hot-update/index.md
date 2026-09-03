@@ -52,6 +52,7 @@ flowchart TB
 
 ## 本文结构
 
+0. **[🧪 diff 生成 · 单步调试模拟器](./hdiff-sim)** —— 改新旧文本，单步看搜索/裁决/接龙/序列化，每步附源码行号
 1. **[cover：差量的核心数据结构](./hdiff-cover)** —— 三元组怎么来、怎么算账、怎么被裁剪
 2. **[diff 生成：cover 搜索与序列化](./hdiff-generate)** —— 后缀数组匹配、收益模型、HDIFFSF20/HDIFF13 两种格式
 3. **[patch 应用：新文件如何被重建](./hdiff-patch)** —— gap 拷贝 + 残差加法、step 流式消费、运行时安全检查
