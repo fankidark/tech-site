@@ -72,6 +72,8 @@ export default defineConfig({
               { text: '总览：编码器单步详解', link: '/texture-compression/' },
               { text: 'ETC 压缩单步 + 100×100 实例', link: '/texture-compression/etc-encode-100x100' },
               { text: 'ASTC 压缩单步 + 100×100 实例', link: '/texture-compression/astc-encode-100x100' },
+              { text: 'DXT / BC1-7：另一种块压缩范式', link: '/texture-compression/dxt-bc1-7' },
+              { text: '🧪 纹理压缩实验台（建设中）', link: '/texture-compression/lab' },
             ],
           },
         ],

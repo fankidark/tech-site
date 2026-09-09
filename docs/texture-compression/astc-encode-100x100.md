@@ -26,13 +26,17 @@ ETC1 是"格式写死"，ASTC 是"**每块自己选配置**"：
 | 5×5 | 25 | 20×20 = 400 块 | 5.12 | 6,400 B |
 | 6×6 | 36 | 17×17 = **289 块** | 3.56 | 4,624 B |
 
-![grid 4x4](./assets/grid-4x4.png)  ![grid 5x5](./assets/grid-5x5.png)  ![grid 6x6](./assets/grid-6x6.png)
+同一张图三种切法（白色网格 = 每块 128bit 的边界）：
 
-⚠️ 注意 6×6 那行：100 不能被 6 整除 → `ceil(100/6)=17`，**实际覆盖 102×102**，右侧/下方各 pad 2 像素（规范允许 pad 任意颜色，但 pad 内容会参与该块优化、污染边缘像素质量——真实工程坑，见文末）。
+![三种 footprint 的切块对比](./assets/annot/astc-footprints.png)
+
+> 💡 **看图要点**：块越大，单块里像素越多、每像素分到的 bit 越少（8 → 5.12 → 3.56 bpp）。第三张图注意最右/最下：**100 不能被 6 整除**，17 列/行块里最边缘一块实际覆盖到 102——压出来会带 2px pad（见文末 6×6 小节）。
 
 ## 每个块怎么编码（机制单步）
 
 解码一个 128bit 块要按序读出：
+
+![ASTC 128bit 布局色带（以真实块 block(6,6) 为例）](./assets/annot/astc-128bit-layout.png)
 
 1. **block mode（bit 0..10）**：决定 weight grid 尺寸（≤ footprint）与 weight 量化档数
 2. **partition count（bit 11..12）**：1~4 个分区
@@ -65,6 +69,12 @@ astcenc 对这块的 128bit 真实输出：
 一次真实的"预算权衡"：Q1 渐变块颜色沿一条平滑曲线走，两个 8bit 端点 + 每像素插值足以还原 → 编码器把大头（58/128）给了 **weight**（4×4 grid = 每像素一个 weight，量化 10 档 ≈ 每 weight 3.6bit）；端点只花 53bit 存 6 个 8bit 端点值的量化。
 
 > 为什么 weight 不存更多档？block mode 的 (H,R) 只能表达 **12 种 weight 档**（2,3,4,5,6,8,10,12,16,20,24,32），10 档已是"预算花不完时的常见选择"；档数再高 weight 区变长，会挤掉端点预算。
+
+### 解码还原：同一块压前压后
+
+![block(6,6) ASTC 4×4 压缩前后对比](./assets/annot/astc-block-before-after.png)
+
+对比 ETC 篇那张 block(0,0) 前后图：同样 16 像素 → 8 字节（ETC1）/ 16 字节（ASTC 4×4），ASTC 的还原结果每个像素都不同——因为每个像素有自己的 weight 在两个端点色之间插值，而不是 ETC1 的"4 档修正选 1"。误差 Δ 基本在 ±2 以内（这也是 4×4 能到 55 dB 的原因）。
 
 ### 4×4 全图配置统计（真实）
 
@@ -183,6 +193,26 @@ ee9ce9ca9ca1ca0ca00b920014eb20f3
 | 典型用途（vault 选型表） | UI/法线/关键角色 | 法线/重要道具 | **场景/角色主力** |
 
 质量-体积的剪刀差在 5×5→6×6 之间最大（体积再省 28%，代价却是 8.9dB）——这也是"**6×6 不是万能**：远处场景无所谓，近景角色/UI 掉画质一眼可见"这句工程经验的数据来源。
+
+## 源码解析：128bit 在真实代码里怎么被切开
+
+本页所有"解剖块"的字段都来自配套 Python 解析器 `astc_parse.py`——它逐行移植自 **ARM astcenc 官方解码函数** `physical_to_symbolic`（`astcenc_symbolic_physical.cpp:291`）。核心逻辑浓缩如下（行号 = 官方 5.7.0 源码）：
+
+```cpp
+// astcenc_symbolic_physical.cpp:301  物理 128bit → 语义字段
+int block_mode = read_bits(11, 0, pcb);            // ① 前 11 bit 就是 block mode
+int partition_count = read_bits(2, 11, pcb) + 1;   // ② 接下来 2 bit 是分区数−1
+...
+// astcenc_block_sizes.cpp:36  decode_block_mode_2d()
+//   从 block mode 解出：weight grid 宽高 + 量化档 + 是否 dual-plane
+//   （本页解析器把这段原样翻译成 Python 的 decode_block_mode_2d）
+...
+if (partition_count == 1)
+    color_formats[0] = read_bits(4, 13, pcb);       // ③ pc=1：4 bit CEM 固定在 bit13..16
+// 权重区：bits_for_weights 从 bit 127 向下占；端点数据从低位起
+```
+
+0 基础读者不用读懂 C++，只需抓住一点：**解码器的工作顺序，就是本文"机制单步"那 5 步的逆过程**——先读 block mode 知道 weight 网格和档位，再读分区与 CEM，最后按 ISE 规则把两段数据解出来插值。编码器（没贴，几万行）则是在巨大配置空间里"猜"哪套参数解码效果最好——猜得越准，图越接近原图。
 
 ## 复现数据的三句话
 
