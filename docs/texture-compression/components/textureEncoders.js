@@ -5,6 +5,8 @@
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const b = (n) => BigInt(n);
 const B = (n) => 1n << b(n);
+// Python round() = 银行家舍入（.5 取偶数）；JS Math.round 是四舍五入 → 两者决策会系统性不同
+const pyround = (x) => { const f = Math.floor(x); const d = x - f; if (d < 0.5) return f; if (d > 0.5) return f + 1; return f % 2 === 0 ? f : f + 1; };
 
 // ============ ETC1 ============
 const ETC1_MOD = [[2,8,-2,-8],[5,17,-5,-17],[9,29,-9,-29],[13,42,-13,-42],
@@ -23,8 +25,8 @@ export function etc1EncodeBlock(px) {
       for (let c = 0; c < 3; c++) avg[s][c] += px[o+c];
       cnt[s]++;
     }
-    for (let s = 0; s < 2; s++) for (let c = 0; c < 3; c++) avg[s][c] = Math.round(avg[s][c]/cnt[s]);
-    const base555 = [0,0,0].map((_,c) => clamp(Math.round(avg[0][c]/8), 0, 31));
+    for (let s = 0; s < 2; s++) for (let c = 0; c < 3; c++) avg[s][c] = pyround(avg[s][c]/cnt[s]);
+    const base555 = [0,0,0].map((_,c) => clamp(pyround(avg[0][c]/8), 0, 31));
     const dl = [0,0,0];
     for (let c = 0; c < 3; c++) {
       let bd = 0, be = Infinity;
@@ -37,8 +39,8 @@ export function etc1EncodeBlock(px) {
       dl[c] = bd;
     }
     const base2_555 = [0,1,2].map(c => base555[c]+dl[c]);
-    const q1 = [0,1,2].map(c => clamp(Math.round(avg[0][c]/17), 0, 15));
-    const q2 = [0,1,2].map(c => clamp(Math.round(avg[1][c]/17), 0, 15));
+    const q1 = [0,1,2].map(c => clamp(pyround(avg[0][c]/17), 0, 15));
+    const q2 = [0,1,2].map(c => clamp(pyround(avg[1][c]/17), 0, 15));
     for (const mode of ['diff','ind']) {
       const c1 = mode==='diff' ? base555.map(extend5) : q1.map(extend4);
       const c2 = mode==='diff' ? base2_555.map(extend5) : q2.map(extend4);
@@ -104,7 +106,7 @@ export function etc1DecodeBlock(w) {
     const s = flip ? (y>=2?1:0) : (x>=2?1:0);
     const cs = s===0 ? c1 : c2, ms = s===0 ? ETC1_MOD[tb1] : ETC1_MOD[tb2];
     const o = (y*4+x)*3, m = ms[idx];
-    out[o] = clamp(cs[0]+m,0,255); out[o+1] = clamp(cs[1]+m,0,255); out[o+2] = clamp(cs[2]+m,0,255); out[o+3] = 255;
+    out[o] = clamp(cs[0]+m,0,255); out[o+1] = clamp(cs[1]+m,0,255); out[o+2] = clamp(cs[2]+m,0,255);
   }
   return out;
 }
@@ -144,7 +146,7 @@ export function bc1DecodeBlock(w) {
   const out = new Uint8ClampedArray(48);
   for (let k = 0; k < 16; k++) {
     const idx = Number((w >> b(2*k+32)) & 3n);
-    out[k*3] = cands[idx][0]; out[k*3+1] = cands[idx][1]; out[k*3+2] = cands[idx][2]; out[k*3+3] = 255;
+    out[k*3] = cands[idx][0]; out[k*3+1] = cands[idx][1]; out[k*3+2] = cands[idx][2];
   }
   return out;
 }
