@@ -65,6 +65,15 @@ export default defineConfig({
               { text: '安全与踩坑（OPENREAD 实录）', link: '/hot-update/hdiff-security' },
             ],
           },
+          {
+            text: '纹理压缩（ETC / ASTC）',
+            collapsed: false,
+            items: [
+              { text: '总览：编码器单步详解', link: '/texture-compression/' },
+              { text: 'ETC 压缩单步 + 100×100 实例', link: '/texture-compression/etc-encode-100x100' },
+              { text: 'ASTC 压缩单步 + 100×100 实例', link: '/texture-compression/astc-encode-100x100' },
+            ],
+          },
         ],
       },
       outline: { level: [2, 3], label: '本页目录' },
