@@ -41,12 +41,12 @@
 ## 主图解：一次差分的全局
 
 ```mermaid
-flowchart LR
+flowchart TB
     OLD["oldData<br/>用户手机上的旧文件"] --> DIFF["hdiffz<br/>找出可复用区间"]
     NEW["newData<br/>CI 构建出的新文件"] --> DIFF
     DIFF --> P["diffData / .patch<br/>通常只有 new 的 5%~30%"]
     P --> PATCH["hpatchz<br/>old + patch"]
-    OLD2["oldData"] --> PATCH
+    OLD2["oldData<br/>（另一份拷贝，内容逐字节相同）"] --> PATCH
     PATCH --> OUT["newData<br/>与 CI 产物逐字节一致"]
 
     style DIFF fill:#a5d8ff,stroke:#1971c2

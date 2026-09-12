@@ -42,7 +42,7 @@ import MatchSearchSimulator from './components/MatchSearchSimulator.vue'
 ## 主图解：四个阶段的职责
 
 ```mermaid
-flowchart LR
+flowchart TB
     A["old + new"] --> B["建后缀数组<br/>resetSuffixString"]
     B --> C["扫描 newData<br/>_search_cover 逐位置"]
     C --> D["getBestMatch<br/>二分 + 左右探测"]

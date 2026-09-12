@@ -20,17 +20,61 @@ html {
   min-height: 80px;
   text-align: center;
 }
-/* 宽图不压扁：容器横向滚动；SVG 保持自然尺寸（文字矢量清晰） */
+/* 图的宽度策略（修「节点内容显示不全」）：
+ * 预渲染的 SVG 带 width=<自然宽>，正文栏只有 ~688px，而部分流程图自然宽到 3790px。
+ * 只靠 overflow-x 的话，窄屏等于把大半张图藏在滚动区外——读者看到的就是"内容不全"。
+ * 所以默认一律缩放到栏宽内（max-width:100%），需要看细节时再点「原始尺寸」横向滚动。
+ * SVG 有 viewBox + preserveAspectRatio，按宽度等比缩放不会变形。 */
 .mermaid-pre {
   position: relative;
   overflow-x: auto;
   overflow-y: hidden;
   cursor: zoom-in;
+  /* 缩放提示条预留的高度，避免提示出现时把正文往下顶 */
+  padding-bottom: 2px;
 }
 .mermaid-pre svg {
-  max-width: none;
+  max-width: 100%;
+  height: auto;
   margin: 0 auto;
   display: block;
+}
+/* 原始尺寸模式：写死宽高，交给容器横向滚动（看细节用） */
+.mermaid-pre.mermaid-fullwidth { cursor: default; }
+.mermaid-pre.mermaid-fullwidth svg {
+  max-width: none;
+  width: auto;
+}
+
+/* 缩放提示条：告诉读者"这张图被缩小了，可以点开看原尺寸" */
+.mermaid-zoomhint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--vp-c-text-3);
+  text-align: left;
+}
+.mermaid-zoomhint .mz-info { flex: 1 1 auto; min-width: 0; }
+.mermaid-zoomhint button {
+  border: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-2);
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mermaid-zoomhint button:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+/* 窄屏下提示条改为竖排，别挤成一堆 */
+@media (max-width: 640px) {
+  .mermaid-zoomhint { flex-direction: column; align-items: flex-start; gap: 6px; }
 }
 .mermaid-error {
   color: #e03131;
@@ -53,7 +97,7 @@ html {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px 72px;
+  padding: 40px 20px 64px;
   cursor: zoom-out;
 }
 .mermaid-lightbox .mmlb-scroll {
@@ -65,23 +109,53 @@ html {
   background: #fff;
   padding: 16px;
 }
+.mermaid-lightbox .mmlb-scroll.dragging { cursor: grabbing; }
 .mermaid-lightbox svg {
   max-width: none;
   max-height: none;
 }
-.mermaid-lightbox .mmlb-hint {
+/* 缩放用的舞台：缩放后要撑开滚动区，所以尺寸由 JS 写死 */
+.mermaid-lightbox .mmlb-stage { display: block; }
+
+.mermaid-lightbox .mmlb-bar {
   position: fixed;
-  bottom: 18px;
+  bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
   color: #495057;
   font-size: 13px;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 6px 14px;
-  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 6px 16px;
+  border-radius: 16px;
   border: 1px solid #dee2e6;
   white-space: nowrap;
 }
+.mermaid-lightbox .mmlb-hint { color: #495057; }
+.mermaid-lightbox .mmlb-zoom {
+  font-family: var(--vp-font-family-mono);
+  color: #1971c2;
+  font-weight: 600;
+  min-width: 42px;
+  text-align: right;
+}
+.mermaid-lightbox .mmlb-close {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid #dee2e6;
+  background: #fff;
+  color: #495057;
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+}
+.mermaid-lightbox .mmlb-close:hover { border-color: #1971c2; color: #1971c2; }
 
 /* 长流程图折叠（>620px 的图默认收起，可点展开）：
  * 避免超长图把页面撑得很难滚动/首尾看不到 */

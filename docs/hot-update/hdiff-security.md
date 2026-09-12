@@ -35,15 +35,14 @@
 
 ```mermaid
 flowchart TB
-    A["不可信 diff 包"] --> R1["① 路径穿越<br/>目录 patch 任意写"]
-    A --> R2["② checksum ≠ 签名<br/>来源不可证"]
-    A --> R3["③ 整数溢出 / 内存 DoS<br/>header 驱动 malloc"]
-    A --> R4["④ 压缩插件攻击面<br/>解压炸弹"]
-
-    R1 -.->|"本项目走文件级 patch"| OK1["✅ 天然规避"]
-    R2 -.->|"CDN manifest + patch 后 SHA1"| OK2["✅ 已覆盖"]
-    R3 -.->|"__RUN_MEM_SAFE_CHECK 默认开 + 16MB 上限"| OK3["⚠️ 部分覆盖"]
-    R4 -.->|"压缩库需纳入漏洞更新流程"| OK4["⚠️ 待办"]
+    A["不可信 diff 包<br/>（从 CDN 下载，可能被替换）"] --> R1["① 路径穿越<br/>目录 patch 可任意写"]
+    R1 -->|"本项目走文件级 patch"| OK1["✅ 天然规避"]
+    OK1 --> R2["② checksum ≠ 签名<br/>来源不可证"]
+    R2 -->|"CDN manifest<br/>+ patch 后 SHA1"| OK2["✅ 已覆盖"]
+    OK2 --> R3["③ 整数溢出 / 内存 DoS<br/>header 驱动 malloc"]
+    R3 -->|"__RUN_MEM_SAFE_CHECK<br/>默认开 + 16MB 上限"| OK3["⚠️ 部分覆盖"]
+    OK3 --> R4["④ 压缩插件攻击面<br/>解压炸弹"]
+    R4 -->|"压缩库需纳入<br/>漏洞更新流程"| OK4["⚠️ 待办"]
 
     style R1 fill:#ffc9c9,stroke:#e03131
     style R2 fill:#ffd8a8,stroke:#e8590c

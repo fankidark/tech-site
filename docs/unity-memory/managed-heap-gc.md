@@ -24,7 +24,7 @@ C# 换了个思路：**你只管 new，收尸的活儿交给 GC**。听着很美
 保守式的"猜"带来一个连锁反应，这是整篇的核心因果链：
 
 ```mermaid
-flowchart LR
+flowchart TB
     A["保守式扫描<br/>（不知道哪 8 字节是引用，靠猜）"] --> B["可能把整数误判成引用<br/>（false positive）"]
     B --> C["无法确定某位置是否真是引用"]
     C --> D["不敢移动对象<br/>（移了就得改引用，但改哪些？）"]
@@ -239,18 +239,31 @@ il2cpp::gc::GarbageCollector::AllocateFixed(size_t size, void *descr)
 
 ```mermaid
 flowchart TB
-    A["C#: new Foo()"] --> B["生成代码: il2cpp_object_new(klass)<br/>il2cpp-api.cpp:1033"]
+    A["C#: new Foo()"] --> B["生成代码<br/>il2cpp_object_new(klass)"]
     B --> C["vm/Object.cpp: New(klass)"]
     C --> D{"klass->has_references?"}
-    D -->|"否"| E["NewPtrFree → GC_MALLOC_ATOMIC<br/>Boehm 完全不扫描该对象"]
-    D -->|"是"| F{"klass->gc_desc != GC_NO_DESCRIPTOR?"}
-    F -->|"是"| G["AllocateSpec → GC_gcj_malloc<br/>GCJ 描述符模式：对象内引用<b>精确</b>识别"]
-    F -->|"否"| H["Allocate → GC_MALLOC<br/>保守模式：整个对象当字节扫"]
-    E & G & H --> I["返回指针，构造函数执行"]
+    D -->|"否"| E["NewPtrFree<br/>→ GC_MALLOC_ATOMIC"]
+    D -->|"是"| F{"gc_desc !=<br/>GC_NO_DESCRIPTOR?"}
+    F -->|"是"| G["AllocateSpec<br/>→ GC_gcj_malloc"]
+    F -->|"否"| H["Allocate<br/>→ GC_MALLOC"]
+    E --> I["返回指针，执行构造函数"]
+    G --> I
+    H --> I
     style E fill:#d0ebff,stroke:#1971c2,color:#212529
     style G fill:#b2f2bb,stroke:#2f9e44,color:#212529
     style H fill:#fff3bf,stroke:#f08c00,color:#212529
 ```
+
+三条分支各是什么（对照源码）：
+
+| 分支 | 条件 | 走哪条 GC 接口 | 扫描方式 |
+|---|---|---|---|
+| **NewPtrFree** | `klass->has_references == false` | `GC_MALLOC_ATOMIC` | Boehm **完全不扫描**这个对象（里面确定没有引用） |
+| **AllocateSpec** | 有引用，且 `gc_desc != GC_NO_DESCRIPTOR` | `GC_gcj_malloc` | **GCJ 描述符模式**：对象内部的引用被**精确**识别 |
+| **Allocate** | 有引用，但没有描述符 | `GC_MALLOC` | 保守模式：整个对象当字节流扫，可能误判 |
+
+入口链路：`C# new Foo()` → 生成代码调用 `il2cpp_object_new(klass)`（`libil2cpp/il2cpp-api.cpp:1033`）
+→ `vm/Object.cpp: New(klass)` 里按上表三分支（`vm/Object.cpp:285-310`）。
 
 ### ④ 关键深化：GCJ 描述符 = "半精确" GC
 

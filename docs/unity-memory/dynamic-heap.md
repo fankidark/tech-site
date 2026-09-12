@@ -70,24 +70,36 @@ ASCII 图在网页上看不清，下面用图 + 表逐区拆解。
 
 ### 64 位（MEMORY_USE_LARGE_BLOCKS=1）：一块 256MB 预留切 N 个 Pool
 
-```mermaid
-flowchart LR
-    subgraph MB["一块 256MB 虚拟预留（MemoryBlock）"]
-        direction LR
-        H["MBInfo<br/>+FreeList"] --- P1["Pool #1<br/>16MB"] --- P2["Pool #2<br/>16MB"] --- P3["Pool #3<br/>16MB"] --- PN["…<br/>共 16 个"]
-    end
-    subgraph Pool1["Pool #1 内部（一个 TLSF 实例）"]
-        direction LR
-        PI1["PI<br/>PoolInfo 头"] --- B1["TLSF 块 x"] --- B2["空闲块 x"] --- B3["TLSF 块 x"] --- B4["空闲块 x"]
-    end
-    P1 -.展开.- Pool1
-    style H fill:#d0ebff,stroke:#1971c2,color:#212529
-    style P1 fill:#b2f2bb,stroke:#2f9e44,color:#212529
-    style P2 fill:#b2f2bb,stroke:#2f9e44,color:#212529
-    style P3 fill:#b2f2bb,stroke:#2f9e44,color:#212529
-    style PN fill:#b2f2bb,stroke:#2f9e44,color:#212529
-    style PI1 fill:#ffec99,stroke:#f08c00,color:#212529
-```
+<StripDiagram
+  title="一块 256MB 虚拟预留（MemoryBlock）里的 16 个 Pool 槽位"
+  :segments="[
+    { label: 'MBInfo + FreeList', kind: 'head', weight: 0.9, sub: '块头', note: '管理本块内所有 Pool 的链表头；整块释放时遍历它' },
+    { label: 'Pool #1', kind: 'pool', sub: '16MB', note: '一个 Pool = 一个独立 TLSF 实例；懒创建，首次用到才 commit' },
+    { label: 'Pool #2', kind: 'pool', sub: '16MB' },
+    { label: 'Pool #3', kind: 'pool', sub: '16MB' },
+    { label: '…', kind: 'more', note: '按需继续创建，最多 16 个（m_PoolsPerBlock = 256MB / 16MB）' },
+    { label: 'Pool #16', kind: 'pool', sub: '16MB' }
+  ]"
+  :legend="[
+    { kind: 'head', text: '块头（MBInfo）' },
+    { kind: 'pool', text: 'Pool 槽位（未创建的只占虚拟地址，不占物理内存）' }
+  ]"
+  footnote="逐槽位放大看 Pool #1 内部，就是下面这条：" />
+
+<StripDiagram
+  title="Pool #1 内部 = 一个独立 TLSF 实例（PI 之后是 TLSF 管理的块）"
+  :segments="[
+    { label: 'PI', kind: 'data', weight: 0.9, sub: 'PoolInfo 头', note: '每个 Pool 的头：记录 allocationCount（用于空 Pool 检测）等' },
+    { label: 'TLSF 块 x', kind: 'used', note: '已分配的块，由 Pool 内部的 TLSF 位图 + 链表定位' },
+    { label: '空闲块 x', kind: 'free', note: '空闲块；分配就从这里切，切剩下的挂回对应档位的链表' },
+    { label: 'TLSF 块 x', kind: 'used' },
+    { label: '空闲块 x', kind: 'free' }
+  ]"
+  :legend="[
+    { kind: 'data', text: 'PoolInfo' },
+    { kind: 'used', text: '已分配块' },
+    { kind: 'free', text: '空闲块' }
+  ]" />
 
 | 区域 | 是什么 | 作用 |
 |---|---|---|
@@ -101,30 +113,40 @@ flowchart LR
 
 ### 32 位（MEMORY_USE_LARGE_BLOCKS=0）：独立 TLSF Pool
 
-```mermaid
-flowchart LR
-    subgraph P32["独立 Pool（256KB 或 64KB 预留粒度）"]
-        direction LR
-        PI32["PI<br/>PoolInfo 头"] --- C1["TLSF 块 x"] --- C2["空闲块 x"] --- C3["TLSF 块 x"]
-    end
-    style PI32 fill:#ffec99,stroke:#f08c00,color:#212529
-```
+<StripDiagram
+  title="32 位：每个 Pool 单独一块预留，没有 MBInfo 层"
+  :segments="[
+    { label: 'PI', kind: 'data', weight: 0.9, sub: 'PoolInfo 头', note: '没有 MemoryBlockInfo，PoolInfo 就是最外层的头' },
+    { label: 'TLSF 块 x', kind: 'used' },
+    { label: '空闲块 x', kind: 'free' },
+    { label: 'TLSF 块 x', kind: 'used' }
+  ]"
+  :legend="[
+    { kind: 'data', text: 'PoolInfo' },
+    { kind: 'used', text: '已分配块' },
+    { kind: 'free', text: '空闲块' }
+  ]" />
 
 32 位平台预留粒度小（iOS/Switch 256KB、32 位通用 64KB），**装不下"一块切多 Pool"**，
 所以每个 Pool 单独一块预留，没有 MBInfo 层——结构简单但预留次数多。
 
 ### LargeAlloc：大块独立分配（≥ Pool/2 的请求）
 
-```mermaid
-flowchart LR
-    subgraph LA["LargeAlloc 块（独立虚拟内存）"]
-        direction LR
-        MBI["MBInfo"] --- LAI1["LAInfo #1"] --- XX1["用户数据 xxx"] --- LAI2["LAInfo #2"] --- XX2["用户数据 xxx"]
-    end
-    style MBI fill:#d0ebff,stroke:#1971c2,color:#212529
-    style LAI1 fill:#ffc9c9,stroke:#e03131,color:#212529
-    style LAI2 fill:#ffc9c9,stroke:#e03131,color:#212529
-```
+<StripDiagram
+  title="LargeAlloc 块：多个大分配混排在同一块独立虚拟内存里"
+  :segments="[
+    { label: 'MBInfo', kind: 'head', weight: 0.8, sub: '块头', note: '挂到 DynamicHeapAllocator 的 LargeAlloc 链表' },
+    { label: 'LAInfo #1', kind: 'warn', weight: 0.8, sub: 'size / 对齐', note: '每个大分配自己的头；free 时直接归还虚拟页' },
+    { label: '用户数据 xxx', kind: 'data', sub: '40MB', note: '大块不进 TLSF Pool，因此不参与小块碎片' },
+    { label: 'LAInfo #2', kind: 'warn', weight: 0.8, sub: 'size / 对齐' },
+    { label: '用户数据 xxx', kind: 'data', sub: '24MB' }
+  ]"
+  :legend="[
+    { kind: 'head', text: '块头' },
+    { kind: 'warn', text: 'LAInfo（大分配头）' },
+    { kind: 'data', text: '用户数据' }
+  ]"
+  footnote="一个预留块里可以有多个大分配混排——它们和小块世界完全隔离。" />
 
 | 区域 | 是什么 | 作用 |
 |---|---|---|

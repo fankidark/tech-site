@@ -300,18 +300,16 @@ free 主流程：合并前 → 合并后 → 插入空闲链表 → 置位图。
 
 ```mermaid
 flowchart TB
-    subgraph malloc
-        A1["tlsf_malloc(tlsf, size)"] --> A2["adjust_request_size(size, ALIGN)<br/>对齐 + 最小块约束"]
-        A2 --> A3["block_locate_free()<br/>① mapping_search → (fl, sl)<br/>② search_suitable_block 位图查找<br/>③ remove_free_block 摘出链表"]
-        A3 --> A4["block_prepare_used()<br/>④ block_trim_free 尾部多余还池<br/>⑤ block_mark_as_used<br/>⑥ 返回 block_to_ptr"]
-    end
-    subgraph free
-        B1["tlsf_free(tlsf, ptr)"] --> B2["block_from_ptr(ptr)<br/>指针回算块头"]
-        B2 --> B3["block_merge_prev(control, block)<br/>向前合并（前块空闲时）"]
-        B3 --> B4["block_merge_next(control, block)<br/>向后合并（后块空闲时）"]
-        B4 --> B5["block_mark_as_free(block)"]
-        B5 --> B6["block_insert(control, block)<br/>mapping_insert → 头插 + 置位图"]
-    end
+    A1["tlsf_malloc(tlsf, size)"] --> A2["adjust_request_size(size, ALIGN)<br/>对齐 + 最小块约束"]
+    A2 --> A3["block_locate_free()<br/>① mapping_search → (fl, sl)<br/>② search_suitable_block 位图查找<br/>③ remove_free_block 摘出链表"]
+    A3 --> A4["block_prepare_used()<br/>④ block_trim_free 尾部多余还池<br/>⑤ block_mark_as_used<br/>⑥ 返回 block_to_ptr"]
+    A4 -. "分配完，下面换成释放路径" .-> B1
+    B1["tlsf_free(tlsf, ptr)"] --> B2["block_from_ptr(ptr)<br/>指针回算块头"]
+    B2 --> B3["block_merge_prev(control, block)<br/>向前合并（前块空闲时）"]
+    B3 --> B4["block_merge_next(control, block)<br/>向后合并（后块空闲时）"]
+    B4 --> B5["block_mark_as_free(block)"]
+    B5 --> B6["block_insert(control, block)<br/>mapping_insert → 头插 + 置位图"]
+
     style A3 fill:#fff3bf,stroke:#f08c00,color:#212529
     style A4 fill:#b2f2bb,stroke:#2f9e44,color:#212529
     style B3 fill:#d0ebff,stroke:#1971c2,color:#212529

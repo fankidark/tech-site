@@ -1,6 +1,8 @@
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
-# 误在仓库根跑构建时会生成 .vitepress/dist*，别提交进去
-.vitepress/
+# 误在仓库根跑构建时会生成 .vitepress/dist*，别提交进去。
+# 注意必须写 /.vitepress/（前导斜杠锚定仓库根）——
+# 写成 .vitepress/ 会连带忽略 docs/.vitepress/（主题与组件都在里面）。
+/.vitepress/
 *.log

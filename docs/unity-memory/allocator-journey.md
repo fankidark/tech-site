@@ -61,27 +61,42 @@ Unity 的分配不是"找一块够大的内存"，而是**先问"这块内存是
 
 ```mermaid
 flowchart TB
-    A["UNITY_NEW(Mesh, kMemGeometry)"] --> B["operator new(size, label, align, file, line)<br/>MemoryManager.cpp:204"]
-    B --> C["malloc_internal()<br/>MemoryManager.cpp:367"]
-    C --> D["MemoryManager::Allocate()<br/>MemoryManager.cpp:1631 ⭐总调度"]
+    A["UNITY_NEW(Mesh, kMemGeometry)"] --> B["operator new(size, label,<br/>align, file, line)"]
+    B --> C["malloc_internal()"]
+    C --> D["MemoryManager::Allocate()<br/>⭐总调度"]
     D --> E{"IsTempLabel?"}
-    E -->|"是(kMemTempAlloc)"| F["TLSAllocator 线程本地栈"]
-    E -->|"否"| G["GetAllocator(label)<br/>查 m_AllocatorMap 路由表<br/>MemoryManager.cpp:2235"]
-    G --> H["DualThreadAllocator::Allocate<br/>DualThreadAllocator.cpp:194"]
+    E -->|"是(kMemTempAlloc)"| F["TLSAllocator<br/>线程本地栈"]
+    E -->|"否"| G["GetAllocator(label)<br/>查 m_AllocatorMap 路由表"]
+    G --> H["DualThreadAllocator::Allocate"]
     H --> I{"size ≤ 64B?"}
-    I -->|"是"| J["BucketAllocator 无锁桶<br/>BucketAllocator.cpp:87 快路径"]
-    I -->|"否/桶满"| K["DynamicHeapAllocator::Allocate<br/>DynamicHeapAllocator.cpp:409"]
+    I -->|"是"| J["BucketAllocator 无锁桶<br/>快路径"]
+    I -->|"否/桶满"| K["DynamicHeapAllocator::Allocate"]
     K --> L{"TLSF 池有空间?"}
-    L -->|"有"| M["tlsf_memalign 亚微秒返回"]
+    L -->|"有"| M["tlsf_memalign<br/>亚微秒返回"]
     L -->|"无"| N["新建 TLSF 池 → 重试"]
     N --> O{"还不够?<br/>(超大分配)"}
-    O -->|"是"| P["LargeAlloc 直接走虚拟内存页"]
-    J & M & P --> Q["返回 ptr → placement new 构造 Mesh"]
+    O -->|"是"| P["LargeAlloc<br/>直接走虚拟内存页"]
+    J --> Q["返回 ptr"]
+    M --> Q
+    P --> Q
+    Q --> R["placement new 构造 Mesh"]
     style D fill:#a5d8ff,stroke:#1971c2,color:#212529
     style J fill:#b2f2bb,stroke:#2f9e44,color:#212529
     style K fill:#fff3bf,stroke:#f08c00,color:#212529
     style P fill:#ffc9c9,stroke:#e03131,color:#212529
 ```
+
+图中每个函数在源码里的确切位置（行号均已核对）：
+
+| 环节 | 函数 | 位置 |
+|---|---|---|
+| ② | `operator new(size, label, align, file, line)` | `MemoryManager.cpp:204` |
+| ③ | `malloc_internal()` | `MemoryManager.cpp:367` |
+| ④ | `MemoryManager::Allocate()` | `MemoryManager.cpp:1631` |
+| ⑤ | `GetAllocator(label)` 路由查表 | `MemoryManager.cpp:2235` |
+| ⑥ | `DualThreadAllocator<...>::Allocate` | `DualThreadAllocator.cpp:194` |
+| ⑦ | `BucketAllocator::Allocate` | `BucketAllocator.cpp:87` |
+| ⑧ | `DynamicHeapAllocator::Allocate` | `DynamicHeapAllocator.cpp:409` |
 
 ## 环节 1：`UNITY_NEW` 只是语法糖
 

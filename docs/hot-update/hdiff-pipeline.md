@@ -36,29 +36,25 @@
 
 ```mermaid
 flowchart TB
-    subgraph ci["🏗️ 打包机（Jenkins，出资源分支）"]
-        A1["SVN 导出<br/>Dev/Res/Product 四目录"] --> A2["BuildAB<br/>AssetBundle 构建产物 .uab"]
-        A2 --> A3["XBuilderCopyFileAndCreateIndex<br/>拷贝产物 + 建 index"]
-        A3 --> A4["hdiffz（CI 侧工具）<br/>new.ab + 各历史 old.ab → .patch"]
-        A4 --> A5["生成 patchInfo json<br/>{文件名: {sha1,size,oldVer,newVer}}"]
-        A5 --> A6["index 写入<br/>PatchVersionList（可补丁来源版本）"]
-        A6 --> A7["发布 CDN<br/>splitPatch/{oldVer}/Patch/*.patch<br/>+ manifest index + 版本 json"]
-    end
-    subgraph client["📱 客户端（启动热更）"]
-        B1["VersionCheck / 版本 json"] --> B2["InitFileInfo<br/>本地 index vs 远端 index 差异"]
-        B2 --> B3{"sha1 相同?"}
-        B3 -->|同| SKIP["跳过"]
-        B3 -->|不同| B4{"新文件 PatchVersionList<br/>含本地当前版本?"}
-        B4 -->|含| B5["AddPatchInfo → 走差分"]
-        B4 -->|不含| B6["AddDownloadABMap → 走全量"]
-        B5 --> B7["DownloadPatch<br/>下载 .patch"]
-        B6 --> B8["DownloadAb<br/>下载全量 .uab"]
-        B7 --> B9["PatchFilesApply<br/>hpatchz 合并"]
-        B9 --> B10["FilesMerge<br/>临时目录 → 正式目录"]
-        B8 --> B10
-        B10 --> B11["FilesCheck<br/>SHA1 修复回合"]
-    end
-    ci -->|"CDN"| client
+    A1["🏗️ ① SVN 导出<br/>Dev / Res / Product 四目录"] --> A2["② BuildAB<br/>AssetBundle 构建产物 .uab"]
+    A2 --> A3["③ XBuilderCopyFileAndCreateIndex<br/>拷贝产物 + 建 index"]
+    A3 --> A4["④ hdiffz（CI 侧工具）<br/>new.ab + 各历史 old.ab → .patch"]
+    A4 --> A5["⑤ 生成 patchInfo json<br/>{文件名: {sha1, size, oldVer, newVer}}"]
+    A5 --> A6["⑥ index 写入<br/>PatchVersionList（可补丁来源版本）"]
+    A6 --> A7["⑦ 发布 CDN<br/>splitPatch/{oldVer}/Patch/*.patch<br/>+ manifest index + 版本 json"]
+    A7 ==> B1["📱 客户端启动热更"]
+    B1 --> B2["⑧ InitFileInfo<br/>本地 index vs 远端 index 差异"]
+    B2 --> B3{"⑨ sha1 相同?"}
+    B3 -->|同| SKIP["跳过这个文件"]
+    B3 -->|不同| B4{"⑩ 新文件 PatchVersionList<br/>含本地当前版本?"}
+    B4 -->|含| B5["⑪ AddPatchInfo → 走差分"]
+    B4 -->|不含| B6["⑪' AddDownloadABMap → 走全量"]
+    B5 --> B7["⑫ DownloadPatch<br/>下载 .patch"]
+    B6 --> B8["⑫' DownloadAb<br/>下载全量 .uab"]
+    B7 --> B9["⑬ PatchFilesApply<br/>hpatchz 合并"]
+    B9 --> B10["⑭ FilesMerge<br/>临时目录 → 正式目录"]
+    B8 --> B10
+    B10 --> B11["⑮ FilesCheck<br/>SHA1 修复回合"]
 
     style A4 fill:#a5d8ff,stroke:#1971c2
     style B9 fill:#b2f2bb,stroke:#2f9e44

@@ -18,6 +18,9 @@ const waitMs = Number(process.argv[4] || 9000)
 // 用法：node probe-dom.cjs <url> <out.json> <waitMs> --expr "JS 表达式"
 const exprIdx = process.argv.indexOf('--expr')
 const extraExpr = exprIdx > 0 ? process.argv[exprIdx + 1] : null
+// 可选：窗口尺寸，默认 1500x1400。手机宽度用 --size 414x900 之类
+const sizeIdx = process.argv.indexOf('--size')
+const winSize = sizeIdx > 0 ? process.argv[sizeIdx + 1] : '1500,1400'
 
 const CHROME =
   process.env.MMDC_CHROME ||
@@ -40,7 +43,7 @@ const PROBE_JS = `
     '.aj-root', '.aj-node.on', '.aj-pick.on', '.aj-bucket.hit',
     '.aba-root', '.aba-node', '.aba-verdict',
     '.dt-root', '.dt-cell', '.dt-cell.target',
-    '.pl-root', '.pl-blockmap',
+    '.pl-root', '.pl-blockmap', '.olb-root', '.olb-bar',
     '.tw-root', '.tw-bitmap', '.tw-flbit.on',
     '.mermaid-pre', '.mermaid-pre svg', '.mermaid-error'
   ];
@@ -87,9 +90,12 @@ const PROBE_JS = `
   // 6. 高亮节点要有可见底色
   const hi = first('.mm-block.hi');
   if (cnt('.mm-block.hi')) A(hi && hi.visible, '高亮内存块不可见');
-  // 7. StepPlayer 两栏布局：viz 与 side 应该并排（y 接近）而不是重叠
+  // 7. StepPlayer 两栏布局：宽屏下 viz 与 side 应该并排（y 接近）；
+  //    窄屏（<860px）按设计会堆叠，跳过这条断言
   const viz = first('.sp-viz'), side = first('.sp-side');
-  if (viz && side) A(Math.abs(viz.y - side.y) < 40, '播放器两栏未并排: viz.y=' + viz.y + ' side.y=' + side.y);
+  if (viz && side && window.innerWidth > 900) {
+    A(Math.abs(viz.y - side.y) < 40, '播放器两栏未并排: viz.y=' + viz.y + ' side.y=' + side.y);
+  }
   // 8. 不应出现内容横向溢出（超过 viewport 太多）
   A(document.documentElement.scrollWidth <= window.innerWidth + 40,
     '页面横向溢出: scrollWidth=' + document.documentElement.scrollWidth + ' innerWidth=' + window.innerWidth);
@@ -167,7 +173,7 @@ const chrome = spawn(  CHROME,
     '--disable-gpu',
     '--no-sandbox',
     '--hide-scrollbars',
-    '--window-size=1500,1400',
+    '--window-size=' + winSize,
     '--virtual-time-budget=' + waitMs,
     '--remote-debugging-port=' + PORT,
     '--user-data-dir=' + userDir,
