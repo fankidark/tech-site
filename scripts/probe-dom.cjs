@@ -14,6 +14,10 @@ const path = require('path')
 const url = process.argv[2]
 const outFile = process.argv[3] || 'probe.json'
 const waitMs = Number(process.argv[4] || 9000)
+// 可选：额外在页面里执行的表达式（用来验证交互组件确实会随操作变化）
+// 用法：node probe-dom.cjs <url> <out.json> <waitMs> --expr "JS 表达式"
+const exprIdx = process.argv.indexOf('--expr')
+const extraExpr = exprIdx > 0 ? process.argv[exprIdx + 1] : null
 
 const CHROME =
   process.env.MMDC_CHROME ||
@@ -253,6 +257,21 @@ async function main() {
     stepwalk = 'stepwalk failed: ' + e.message
   }
 
+  // ---- 第三轮：执行调用方给的额外表达式（用于验证特定交互的行为）----
+  let custom = null
+  if (extraExpr) {
+    try {
+      const r2 = await send('Runtime.evaluate', {
+        expression: extraExpr,
+        returnByValue: true,
+        awaitPromise: true,
+      })
+      custom = r2.result ? r2.result.value : null
+    } catch (e) {
+      custom = 'custom expr failed: ' + e.message
+    }
+  }
+
   ws.close()
   chrome.kill()
   fs.writeFileSync(outFile, result || '{}', 'utf8')
@@ -260,6 +279,7 @@ async function main() {
   console.log('mounted:', JSON.stringify(parsed.mounted))
   console.log('issues:', parsed.issues && parsed.issues.length ? parsed.issues : '（无）')
   if (stepwalk) console.log('stepwalk:', stepwalk)
+  if (custom) console.log('custom:', custom)
 }
 
 main().catch((e) => {

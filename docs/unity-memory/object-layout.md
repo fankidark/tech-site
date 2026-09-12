@@ -2,6 +2,87 @@
 
 > 源码：`libil2cpp/il2cpp-class-internals.h:388`（Il2CppClass）、`libil2cpp/il2cpp-object-internals.h:66`（Il2CppObject）、`libil2cpp/vm/Class.cpp`（布局初始化）
 > 核心：**C# 的"类"在 IL2CPP 里分裂成两个东西——`Il2CppClass`（类型描述符，全程序集共享一份）和 `Il2CppObject`（对象实例，每个 new 一份）**。
+> 本页行号由 `scripts/verify_srcrefs.py` 校验。
+
+<script setup>
+import ObjectLayoutBuilder from './components/ObjectLayoutBuilder.vue'
+</script>
+
+## 先说人话：为什么"一个类"在内存里是"两份东西"
+
+你在 C# 里写：
+
+```csharp
+class Enemy { public string name; public int hp; public bool alive; }
+var a = new Enemy();
+var b = new Enemy();
+```
+
+`a` 和 `b` 是两个不同的对象，但它们的**类型是同一个**。C# 语法把"类型"和"实例"
+写在一起，看起来是一回事；到了 IL2CPP 这层，它们彻底分家：
+
+- **类型**（`Enemy` 长什么样、有哪些字段、有哪些方法、怎么被 GC 扫描）——全程序只存 **一份**，
+  放在非 GC 的元数据区。这叫 `Il2CppClass`。
+- **实例**（`a` 的 `hp` 是 30、`b` 的 `hp` 是 80）——每个 `new` 各存一份，在托管堆上。
+  这叫 `Il2CppObject`。
+
+两者靠**实例开头的 `klass` 指针**连起来。这一个指针同时解决了好几件事：
+
+| 你写的代码 | 底层靠什么实现 |
+|---|---|
+| `a.GetType()` | 读 `a` 对象头的 `klass`，拿到类型描述符 |
+| `a is Enemy` | 沿 `klass` 的继承链往上找 |
+| 虚方法调用 `a.TakeDamage()` | `klass` 里的 vtable 查表 |
+| GC 扫描时知道哪些字段是指针 | `klass` 里的 `gc_desc`（GC 描述符） |
+
+**一句话**：`klass` 指针是"实例"通往"类型"的唯一入口。所有需要"这个对象到底是什么"的操作，
+都得先走这一步。
+
+## 亲手排一次字段（可交互）
+
+在讲结构体细节之前，先动手感受一下"对齐"这件事——它直接决定你的对象占多少内存：
+
+<ObjectLayoutBuilder />
+
+## 术语先对齐
+
+| 术语 | 一句话解释 |
+|---|---|
+| **Il2CppObject** | 所有托管对象的公共头部：`klass` 指针 + `monitor`，共 16 字节（64 位） |
+| **Il2CppClass** | 类型描述符：类型名、字段布局、方法表、GC 描述符都在这 |
+| **klass 指针** | 对象头里指向自己类型描述符的指针，8 字节 |
+| **monitor** | 对象头里留给锁的那 8 字节（`lock(obj)` 用），没加锁时也是占位的 |
+| **vtable** | 虚方法表，存在 `Il2CppClass` 尾部（`VirtualInvokeData vtable[]` 零长数组） |
+| **gc_desc** | GC 描述符，告诉 GC"这个类型的哪些偏移上是指针" |
+| **padding** | 为了满足对齐要求而填充的废弃字节 |
+| **instance_size** | 类型描述符里记录"这个类型的实例占多少字节" |
+| **装箱（boxing）** | 把值类型塞进一个 `Il2CppObject` 里——多付一次对象头的代价 |
+
+## 常见误解
+
+::: warning 误解一：`class` 是引用类型，所以对象里存的是"类的内容"
+反了。对象里存的是**字段值**，类型信息只存一个 8 字节的 `klass` 指针。
+所以你给一个类加 10 个方法，每个实例的大小**一个字节都不会变**——
+方法在 `Il2CppClass` 里，全程序共享一份。
+:::
+
+::: warning 误解二：字段是按声明顺序紧凑排列的
+不是紧凑的，每个字段都要对齐到自身大小的边界。`bool` 后面跟 `long`，
+中间会被塞 7 个字节的 padding。**同样的字段换个顺序，对象可能变小**——
+上面的交互演示可以直接验证这一点。
+:::
+
+::: warning 误解三：小对象不占地方
+每个托管对象先付 16 字节对象头。一个只有 1 个 `bool` 字段的类，
+实际占用 24 字节（16 头 + 1 数据 + 7 尾部 padding），**你的数据只占其中 1 字节**。
+所以"减少小对象数量"比"给对象减字段"收益大得多。
+:::
+
+::: warning 误解四：`struct` 一定比 `class` 省内存
+不一定。`struct` 作为字段时确实内联展开（省掉一次对象头），
+但一旦被装箱、或者放进 `List<T>` 之外的引用位置，就要重付对象头。
+而且 `struct` 作为参数传递时会被整块拷贝——**省的是内存，可能花的是 CPU**。
+:::
 
 ## 先分清：class 和 object 是两套存储
 
@@ -272,6 +353,16 @@ static 字段 count;       → klass->static_fields      → GC Root（不随实
 | bitmap 按 offset/8 置位 | `libil2cpp/vm/Class.cpp:1869-1928` |
 | struct 递归置位 | `libil2cpp/vm/Class.cpp:1934` |
 | static_fields_size 计算 | `libil2cpp/vm/Class.cpp:798` |
+
+## 自检清单
+
+- [ ] 能说清 `Il2CppClass` 和 `Il2CppObject` 各自存在哪、各有几份
+- [ ] 能说出对象头那两个 8 字节字段分别是什么、各自解决什么问题
+- [ ] 能手算一个"2 个 int + 1 个 bool + 1 个 string 字段"的类的实例大小（提示：别忘了末尾 padding）
+- [ ] 能解释为什么给类加方法不会增加实例大小
+- [ ] 能说出 `gc_desc` 在 GC 扫描时起什么作用
+- [ ] 能解释 `struct` 字段为什么是"内联展开"、这省掉了什么
+- [ ] 能说出 boxing 的代价具体是什么（多付哪几样东西）
 
 ## 延伸阅读
 
