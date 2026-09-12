@@ -1,6 +1,6 @@
 # Deallocate 全流程：一个裸指针如何找回自己的 Allocator
 
-> 源码：`Runtime/Allocator/MemoryManager.cpp` / `VirtualAllocator.h`
+> 源码：`Runtime/Allocator/MemoryManager.cpp`——注意 `VirtualAllocator` 是 `MemoryManager` 的**内嵌类**（定义从 `MemoryManager.cpp:561` 开始），源码树里**没有**独立的 `VirtualAllocator.h`（老版本本篇写错过这个文件名，这里留个记号 no-verify）
 > 核心：**释放比分配难——label 可能"骗人"，最终靠 BlockInfo 表按地址反查**。
 
 ## 释放比分配难在哪

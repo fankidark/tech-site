@@ -1,17 +1,56 @@
 # 一次分配的完整旅程：`UNITY_NEW` 从宏到物理内存
 
-> 源码：`Runtime/Allocator/MemoryManager.cpp` / `DualThreadAllocator.cpp` / `DynamicHeapAllocator.cpp`
+> 源码：`Runtime/Allocator/MemoryManager.cpp` / `DualThreadAllocator.cpp` / `DynamicHeapAllocator.cpp` / `BucketAllocator.cpp`
 > 核心：**给每一字节标注身份，再按身份分流**——`label → allocator` 路由是整套内存系统的主轴。
+> 本页所有行号均可在上述源码里翻到，由 `scripts/verify_srcrefs.py` 批量校验。
 
-## 为什么一次 new 要走这么多层
+<script setup>
+import AllocatorJourney from './components/AllocatorJourney.vue'
+</script>
 
-引擎代码里随处可见的写法：
+## 一句话结论
 
-```cpp
-Mesh* mesh = UNITY_NEW(Mesh, kMemGeometry);
-```
+Unity 的分配不是"找一块够大的内存"，而是**先问"这块内存是干什么用的"，再决定交给谁来分配**。
+这个"用途"就是 label。理解 label 路由，整套内存系统就不再是一团乱麻。
 
-C 运行时的 `malloc` 一步就能给内存，Unity 为什么要垫 5 层？因为 malloc 满足不了游戏的四个诉求：
+## 先用生活类比建立直觉
+
+想象你要在图书馆存一批书：
+
+- **直接找管理员要空书架**（= 系统 `malloc`）：管理员要翻找、要记录、要防止别人抢占——
+  你每次只存 3 本书，他也要走一遍全套流程，慢。
+- **Unity 的做法**：门口先分流。
+  - **"今天用完就还的临时资料"** → 放进门口的临时推车（**TLS 栈**），走的时候整车拉走，不用登记；
+  - **"小册子/便签"** → 扔进按尺寸分好的四个格子（**Bucket 桶**），谁都能扔，不用叫管理员；
+  - **"常规藏书"** → 交给书架管理员，他有一张精确的索引表（**TLSF 位图**），一眼找到空位；
+  - **"整箱的大宗捐赠"** → 不塞进书架，直接开一间专属库房（**LargeAlloc 直通虚拟内存**）。
+
+**四类东西，四条通道。** 这就是为什么 Unity 不直接用 `malloc`——
+`malloc` 只有一条通道，而游戏里的内存需求天然分成四类，混在一起必然有人被拖慢。
+
+## 术语先对齐
+
+| 术语 | 一句话解释 |
+|---|---|
+| **label** | 内存的"用途身份证"，如 `kMemTempAlloc`（帧内临时）、`kMemDefault`（通用）、`kMemGeometry`（网格数据） |
+| **路由表** | `m_AllocatorMap`，下标是 labelId 的平坦数组，查一次就是 O(1) |
+| **fallback 链** | 分配失败时不直接报错，而是换一个 label 重试（如 Temp 栈满 → 退到堆） |
+| **AllocationHeader** | 分配器给每块内存配的"户口本"，记录归属和大小，位于用户指针之前 |
+| **内部碎片** | 分配给你但你没用上的部分（申请 100B 实际给了 112B，那 12B 就是） |
+| **OOM** | Out Of Memory，内存耗尽 |
+
+## 亲手走一遍（可交互）
+
+下面这个演示把整条链路做成了可点选、可单步的实验台。
+**先选一个尺寸**（48B / 1.2KB / 256B Temp / 4MB / 40MB），你会看到同一个分配入口
+走出**完全不同的路径**；每一步右侧都会给出当前判断依据的真实源码行。
+
+<AllocatorJourney />
+
+## 完整路径（静态总览图）
+
+**为什么一次 new 要走这么多层**——C 运行时的 `malloc` 一步就能给内存，Unity 却垫了 5 层。
+因为 malloc 满足不了游戏的四个诉求：
 
 | 诉求 | malloc 的缺陷 | Unity 的对策 |
 |------|--------------|-------------|
@@ -19,8 +58,6 @@ C 运行时的 `malloc` 一步就能给内存，Unity 为什么要垫 5 层？�
 | **不同生命周期不同策略**（一帧就丢的临时数据 vs 常驻资源） | 单一策略 | label 路由到不同 Allocator（Temp 走栈式，常驻走堆） |
 | **多线程不互相拖累** | 全局锁或竞争 arena | 主线程/工作线程各一个 allocator + 小对象无锁桶 |
 | **碎片可控、OOM 可诊断** | 黑盒 | TLSF 固定策略 + fallback 链 + 分配失败点可追踪 |
-
-## 完整路径
 
 ```mermaid
 flowchart TB
@@ -222,9 +259,40 @@ void* DynamicHeapAllocator::Allocate(size_t size, int align)
 
 > 与其他引擎对比：UE5 用 MallocBinned2/3（也是 bucket 思想但档位更多），全局单一 allocator + 每线程 TLS 缓存；Unity 选择"按 label 多 allocator 实例"，**牺牲统一性换按用途隔离与统计**。两者殊途同归的点：小对象无锁化、大对象直通 OS。
 
+## 常见误解
+
+::: warning 误解：`UNITY_NEW(Mesh, kMemGeometry)` 里的 label 只是给 Profiler 看的注解
+不是注解，是**路由依据**。label 决定这次分配实际落到哪个 allocator 上。
+写成 `kMemTempAlloc` 它就走线程栈，写成 `kMemGeometry` 它就走 TLSF 堆——
+内存的**生命周期语义完全不同**，用错 label 会导致指针提前失效或该回收的没回收。
+:::
+
+::: warning 误解：分配失败会返回 NULL，所以要判空
+默认参数是 `kAllocateOptionNone`，**失败直接 FatalError 崩溃**，不返回 NULL。
+只有显式传 `kAllocateOptionReturnNullIfOutOfMemory`（对应 `UNITY_MALLOC_NULL` 这类宏）才会给你 NULL。
+所以看到 `UNITY_MALLOC` 不判空是对的，不是疏忽。
+:::
+
+::: warning 误解：`size == 0` 的分配会被优化掉
+源码里明确 `if (size == 0) size = 1;`——**照样给你一个唯一的非空指针**。
+原因很实在：释放时需要能用指针把自己从记录里注销掉，
+如果多个 0 大小分配返回同一个地址（比如都返回 NULL），就分不清谁是谁了。
+:::
+
 ## 延伸阅读
 
 - 下一篇：[Deallocate 全流程：指针如何找回自己的 Allocator](./deallocate) — 释放路径的镜像
 - [TLS：每线程临时内存分配](./tls) — 环节 3(f) 的 Temp 分支详解
 - [TLSF：两级分割适应算法](./tlsf) — 环节 5B 的底层算法
+- [DynamicHeapAllocator](./dynamic-heap) — 池的创建、扩展与释放全流程
 - [AtomicStack：无锁栈](./atomic-stack) — 环节 5A 的 `PopBucket` 黑盒拆解
+
+## 自检清单
+
+- [ ] 能说出 label 在这条链路里起的作用，以及它为什么必须是编译期常量
+- [ ] 能解释 `Allocator.Temp` 为什么可以完全无锁，代价是什么
+- [ ] 能说出 65~256 字节这个区间为什么"没有快路径"
+- [ ] 能解释 `size < poolSize / 2` 这个判据为什么存在（提示：什么叫"伪碎片"）
+- [ ] 能说明默认 OOM 崩溃而不是返回 NULL 的工程理由
+- [ ] 能画出四级瀑布，并说出每一级牺牲了什么换到了什么
+

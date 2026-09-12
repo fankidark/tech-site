@@ -2,6 +2,21 @@
 import DefaultTheme from 'vitepress/theme'
 import type { Theme } from 'vitepress'
 import './style.css'
+import StepPlayer from './components/StepPlayer.vue'
+import CodeStepper from './components/CodeStepper.vue'
+import MemoryMap from './components/MemoryMap.vue'
+import BitField from './components/BitField.vue'
+import ByteGrid from './components/ByteGrid.vue'
+
+// 通用教学组件全局注册：文章里直接写 <StepPlayer> / <BitField> 即可，
+// 不需要每个 .md 里 import（VitePress markdown 支持 Vue 组件标签）。
+const globalComponents = {
+  StepPlayer,
+  CodeStepper,
+  MemoryMap,
+  BitField,
+  ByteGrid,
+}
 
 // 修复「本页目录」点击后滚动条反复上下滚动：
 // 1) window.scrollTo({ behavior: 'smooth' }) → 强制 auto（VitePress 锚点跳转）
@@ -98,7 +113,10 @@ if (typeof window !== 'undefined') {
 
 export default {
   extends: DefaultTheme,
-  enhanceApp() {
+  enhanceApp({ app }) {
+    for (const [name, comp] of Object.entries(globalComponents)) {
+      app.component(name, comp)
+    }
     if (typeof window === 'undefined') return
 
     // 兜底：路由切换/内容更新后再填一次

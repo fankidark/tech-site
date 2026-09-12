@@ -1,0 +1,31 @@
+{
+  "_comment": "源码引用校验配置：docs 里写的 `文件:行号` 都到这些树里核对。加新主题时在这里补 root 或 map。",
+  "roots": [
+    "C:/References/unity2020lts",
+    "C:/References/haru_hdiff/HDiffPatchv4_12_1",
+    "C:/References/astc-encoder-5.7.0",
+    "C:/References/astc-encoder",
+    "D:/hdiff/Dev/Client/Packages/com.haru.hdiff",
+    "D:/hdiff/Dev/Client/Assets/Editor/XGame",
+    "D:/hdiff/Dev/Client/Assets/XScript/XManager"
+  ],
+  "map": {
+    "HDiffTask.cs": "D:/hdiff/Dev/Client/Packages/com.haru.hdiff/Runtime/HDiffTask.cs",
+    "HDiffExecutor.cs": "D:/hdiff/Dev/Client/Packages/com.haru.hdiff/Runtime/HDiffExecutor.cs",
+    "HDiffConst.cs": "D:/hdiff/Dev/Client/Packages/com.haru.hdiff/Runtime/HDiffConst.cs",
+    "HDiffPatchWrapper.cs": "D:/hdiff/Dev/Client/Packages/com.haru.hdiff/Runtime/HDiffPatchWrapper.cs",
+    "HDiffManager.cs": "D:/hdiff/Dev/Client/Packages/com.haru.hdiff/Runtime/HDiffManager.cs",
+    "XBuilder.cs": "D:/hdiff/Dev/Client/Assets/Editor/XGame/XBuilder.cs",
+    "XBuilderCopyFileAndCreateIndex.cs": "D:/hdiff/Dev/Client/Assets/Editor/XGame/XBuilderCopyFileAndCreateIndex.cs",
+    "XLaunchManager.cs": "D:/hdiff/Dev/Client/Assets/XScript/XManager/XLaunchManager.cs",
+    "astcenc_symbolic_physical.cpp": "C:/References/astc-encoder-5.7.0/Source/astcenc_symbolic_physical.cpp",
+    "astcenc_block_sizes.cpp": "C:/References/astc-encoder-5.7.0/Source/astcenc_block_sizes.cpp",
+    "astcenc_partition_tables.cpp": "C:/References/astc-encoder-5.7.0/Source/astcenc_partition_tables.cpp",
+    "astcenc_integer_sequence.cpp": "C:/References/astc-encoder-5.7.0/Source/astcenc_integer_sequence.cpp",
+    "astcenc_internal.h": "C:/References/astc-encoder-5.7.0/Source/astcenc_internal.h",
+    "gc.h": "C:/References/unity2020lts/External/il2cpp/builds/external/bdwgc/include/gc.h",
+    "textureEncoders.js": "docs/texture-compression/components/textureEncoders.js"
+  },
+  "extensions": [".c", ".h", ".cpp", ".hpp", ".cs", ".mm", ".inc", ".js"],
+  "ignore_files": ["_demo.md", "_srcmap.md"]
+}
