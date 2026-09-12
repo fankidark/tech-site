@@ -1,4 +1,6 @@
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+# 误在仓库根跑构建时会生成 .vitepress/dist*，别提交进去
+.vitepress/
 *.log
