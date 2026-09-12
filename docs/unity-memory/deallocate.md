@@ -3,6 +3,38 @@
 > 源码：`Runtime/Allocator/MemoryManager.cpp`——注意 `VirtualAllocator` 是 `MemoryManager` 的**内嵌类**（定义从 `MemoryManager.cpp:561` 开始），源码树里**没有**独立的 `VirtualAllocator.h`（老版本本篇写错过这个文件名，这里留个记号 no-verify）
 > 核心：**释放比分配难——label 可能"骗人"，最终靠 BlockInfo 表按地址反查**。
 
+<script setup>
+import DeallocateTracer from './components/DeallocateTracer.vue'
+</script>
+
+## 先说人话：为什么"还东西"比"借东西"难
+
+借东西的时候，你手上是有信息的：你要什么、给谁用、从哪借。
+**还的时候你手上只有一个东西本身。** 你不知道它是从哪儿来的。
+
+内存也是这样：
+
+- 分配：`UNITY_MALLOC(kMemGeometry, n)` —— label 明明白白，路由表一查就知道给谁。
+- 释放：`UNITY_FREE(kMemGeometry, ptr)` —— label 还是那个 label，
+  **但它可能是错的**，而且没有任何机制能事先拦住它。
+
+于是问题变成：**如果 label 是错的，系统怎么还能正确释放？**
+
+答案是三级降级——先信 label，信不过就换 label，再信不过就彻底不信 label、改查"地址户口本"：
+
+<DeallocateTracer />
+
+## 术语先对齐
+
+| 术语 | 一句话解释 |
+|---|---|
+| **TryDeallocate** | 分配器的"验钞"接口：检查指针是不是我的，是就释放并返回 true，不是就返回 false |
+| **Contains(ptr)** | 只检查不释放的版本；`TryDeallocate` 内部第一步就是它 |
+| **fallback label** | 备用 label。分配失败时用它会退到另一个分配器；释放时它用来纠正"错位的 label" |
+| **BlockInfo 表** | 整个进程地址空间的"户口本"：哪段地址归哪个 allocator，一格一登记 |
+| **延迟删除** | 工作线程释放主线程内存时不直接操作，挂进队列由主线程处理 |
+| **kMemInvalidLabelId** | 表示"没有 fallback 了"，降级链到此为止 |
+
 ## 释放比分配难在哪
 
 分配时我们**有 label**——路由表一查就到。释放时表面上也有 label（`UNITY_DELETE(ptr, label)`），但有个阴险的现实：**label 可能"骗人"**。
@@ -158,6 +190,38 @@ Deallocate(ptr) → GetAllocatorContainingPtr(ptr)
 | 反查不碰指针指向的内存 | 指针可能是野的/已释放，读它可能崩溃 | 无法做更深的内容校验（只信地址区间） |
 
 > **一句话总结**：分配靠"身份"（label 路由），释放靠"信任降级"（先信 label，再沿 fallback 链，最后按地址反查）——反查的户口本就是 BlockInfo 表，一次除法一次数组读，连锁都不用。
+
+## 常见误解
+
+::: warning 误解一：传错 label 释放会立刻崩溃，所以很容易发现
+恰恰相反——**传错 label 是最难查的一类 bug**。因为降级链会兜住它：
+label 错了 → 分配器自证失败 → 沿 fallback 链 → 最后按地址反查 → **内存被正确释放了**。
+于是程序继续跑，直到某天出现"随机数据被覆盖"。这类现象和"野指针写坏内存"长得一模一样，
+但根因完全不同。所以 Unity 专门给了个 Profiler 计时器 `gNativeDeallocLabelMismatch`
+（`MemoryManager.cpp:1970` 用到它）——**它高，就说明你的代码里有大量 label 错位**。
+:::
+
+::: warning 误解二：地址反查会去读指针指向的内存
+绝对不会。这是这套机制能在"指针已经失效"的情况下依然安全工作的关键。
+反查只做两件事：**用地址本身做除法**得到格号，**查一张数组**读出主人。
+从头到尾没有解引用过 `ptr`。如果它去读 `*ptr`，遇到野指针就是二次崩溃，
+那就完全失去"兜底"的意义了。
+:::
+
+::: warning 误解三：反查粒度是固定 256KB
+分平台。`kReserveBlockGranularity` 在 PC 64 位是 256MB（`LowLevelDefaultAllocator.h:74`），
+iOS / 主机是 256KB，32 位是 64KB。粒度粗 → 表小但一格可能被多个小分配共享；
+粒度细 → 表大但归属更精确。上文的图为了画得下缩成了 256KB。
+:::
+
+## 自检清单
+
+- [ ] 能说出 label 在释放时可能"骗人"的三种具体场景
+- [ ] 能画出四级降级链，并说明每一级的代价为什么比上一级高
+- [ ] 能解释 `TryDeallocate` 为什么必须自己验证而不是信任调用方
+- [ ] 能说明地址反查为什么"不碰指针指向的内存"是硬要求
+- [ ] 能解释 `gNativeDeallocLabelMismatch` 这个 Profiler 计时器在排查什么
+- [ ] 能说出延迟删除（delayed deletion）解决的是哪个具体问题
 
 ## 延伸阅读
 

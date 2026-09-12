@@ -2,6 +2,41 @@
 
 > 源码：`Runtime/Allocator/DynamicHeapAllocator.cpp` / `.h`
 > Unity 把纯 C 的 TLSF 封装成生产级分配器：**大块虚拟预留（分平台 64KB~256MB）+ 多 Pool 扩展 + BucketAllocator 快路径 + LargeAlloc 溢出路径**。
+> 本页行号由 `scripts/verify_srcrefs.py` 校验。
+
+<script setup>
+import PoolLayoutViewer from './components/PoolLayoutViewer.vue'
+</script>
+
+## 先说人话：TLSF 算法很好，但直接拿来用会出问题
+
+上一篇讲了 TLSF 怎么在 O(1) 内找到空闲块。但把 TLSF 直接接到游戏里，会立刻碰到三个工程问题：
+
+| 问题 | 直白的描述 | Unity 的解法 |
+|---|---|---|
+| **内存从哪来？** | TLSF 只管"池子内部怎么切"，不管池子本身从哪来 | 向系统**预留大块虚拟地址**（PC 64 位 256MB），再切成 16MB 的 Pool |
+| **一次要 40MB 怎么办？** | 塞进 16MB 的池子根本放不下；就算放到大池里，也会把池子撑爆 | 单独开一条 **LargeAlloc** 通道，直接要虚拟页 |
+| **≤64B 的小对象太多** | 每个都走一遍位图查找，累积起来也很贵 | 前置一层无锁 **BucketAllocator**，把最常见的那批截流 |
+
+这一篇讲的就是这三件事怎么落地。**先看第二个问题的模拟**，它最能体现工程上的取舍：
+
+<PoolLayoutViewer />
+
+## 一句话总结这个类
+
+`DynamicHeapAllocator` = **TLSF 算法 + 内存池管理 + 快路径分流**。
+它自己不做算法创新，全部价值在于"怎么把 TLSF 用在真实的内存约束下"。
+
+## 术语先对齐
+
+| 术语 | 一句话解释 |
+|---|---|
+| **reserve（预留）** | 只圈定虚拟地址范围，**不占物理内存** |
+| **commit（提交）** | 真正让这些地址对应到物理内存；此时才消耗内存 |
+| **Pool** | 一块连续内存（默认 16MB），内部由**一个 TLSF 实例**管理 |
+| **MemoryBlock** | 比 Pool 更大的一层：PC 64 位上一次预留 256MB，里面切 16 个 Pool |
+| **LargeAlloc** | 绕开 Pool 的大块分配，直接要虚拟页，释放时整页归还 |
+| **kReserveBlockGranularity** | 预留粒度，分平台不同：PC 64 位 256MB / iOS·主机 256KB / 32 位 64KB |
 
 ## 设计总览（源码注释）
 
@@ -28,9 +63,10 @@
 
 ## 内存布局
 
-源码注释里有一张 ASCII 图（DynamicHeapAllocator.cpp:21-54），它想表达的是三张图：
+源码注释里有两张 ASCII 图（`DynamicHeapAllocator.cpp:21-43` 的 64 位 TLSF 块布局、
+`:45-54` 的 LargeAlloc 布局），它想表达的是三件事：
 **64 位一块 256MB 预留切多个 Pool**、**32 位独立 Pool**、**LargeAlloc 独立大块**。
-ASCII 图在网页上看不清，下面用图+表逐区拆解。
+ASCII 图在网页上看不清，下面用图 + 表逐区拆解。
 
 ### 64 位（MEMORY_USE_LARGE_BLOCKS=1）：一块 256MB 预留切 N 个 Pool
 
@@ -335,7 +371,37 @@ return ptr;
 | `DynamicHeapAllocator.cpp:21-54` | 内存布局 ASCII 图 |
 | `DynamicHeapAllocator.h` | 设计注释（TLSF 集成策略） |
 
+## 常见误解
+
+::: warning 误解一：Unity 预留了 256MB，所以启动就吃掉 256MB 内存
+预留（reserve）只是圈虚拟地址，**一个字节的物理内存都不占**。
+真正占内存的是 commit，而 commit 发生在具体的 Pool 被创建时。
+在任务管理器里看到的常驻内存，和"预留了多少"完全是两件事。
+:::
+
+::: warning 误解二：Pool 越多越好，一开始就全建出来省事
+`InitializeTLSF()` 只创建 TLSF 的控制结构（位图 + 800 个链表头），**不创建任何 Pool**。
+Pool 是第一次用到才 `CreateTLSFPool` 切出来的。这样空跑的分配器几乎零成本，
+而真正吃内存的程序也只在需要时才付钱。
+:::
+
+::: warning 误解三：大块分配走的是"更大的 Pool"
+不是。`size < m_RequestedPoolSize / 2` 这个判据决定了：**只要请求接近半个 Pool，
+就别想进 Pool**。原因是放进去会把整个 Pool 废掉——剩下几 MB 的边角料凑不出可用的大块，
+这就是所谓的"伪碎片"。大块必须走 LargeAlloc，整页进整页出。
+:::
+
+## 自检清单
+
+- [ ] 能说清 reserve 和 commit 的区别，以及为什么这个区别对内存占用统计很重要
+- [ ] 能解释为什么 `InitializeTLSF` 不预先创建 Pool
+- [ ] 能说出 `size < m_RequestedPoolSize / 2` 这个判据保护的是什么
+- [ ] 能解释 `m_UseLocking` 为什么按实例配置，而不是写死加锁或免锁
+- [ ] 能说出 ≤64B 走 Bucket 之后，65B~256B 这个区间为什么"没有快路径"（这是一个真实存在的优化空隙）
+- [ ] 能解释 PoolInfo 为什么放在块尾而不是块头（提示：`GetPoolPointer` 的位运算）
+
 ## 延伸阅读
 
 - [TLSF：两级分割适应算法](./tlsf) — 算法本身
 - [TLS：每线程临时内存分配](./tls) — 互补的帧临时分配路径
+- [一次分配的完整旅程](./allocator-journey) — 这一层在整条瀑布里的位置
