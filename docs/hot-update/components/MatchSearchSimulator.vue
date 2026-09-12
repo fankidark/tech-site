@@ -2,11 +2,13 @@
 import { ref, computed } from 'vue'
 
 // ============ 后缀数组：构建过程 + 逐轮查找 · 双可视化 ============
-// 忠实对照 HDiffPatch v4.12.1：
-//   SA 构建：_suffixString_create (suffix_string.cpp:117) —— 生产用 divsufsort(:55,142 线性时间)，
-//     fallback 路径 std::sort+getStringIsLess(:69,129)；本演示=MSD 基数分桶精化（同族思想，结果逐位一致）
-//   查找：_lower_bound (suffix_string.cpp:155 二分) + getBestMatch (diff.cpp:149，matchDeep=2 左右探测)
-//   主循环联动的轮次序列：_search_cover (diff.cpp:308-340) 的 newPos 推进（kMinMatchLen=5、score≥2）
+// 忠实对照 HDiffPatch v4.12.1（本机源码树 C:\References\haru_hdiff\HDiffPatchv4_12_1）：
+//   SA 构建：_suffixString_create (suffix_string.cpp:117) —— 生产用 divsufsort(:141/:143 线性时间)，
+//     fallback 路径 std::sort+getStringIsLess(:72,:103-109)；本演示=MSD 基数分桶精化（同族思想，结果逐位一致）
+//   查找：_lower_bound (suffix_string.cpp:155) + TSuffixString::lower_bound(:290)
+//   主循环联动的轮次序列：_search_cover (diff.cpp:299，newPos 推进主循环在 :309-340)
+//   匹配：getBestMatch (diff.cpp:149，左右探测循环在 :164-209，matchDeep=2)
+//   kCoverMinMatchLen=5（diff_types.h:71）、kMinMatchScore=2（diff.cpp:65）
 
 const K_MIN_MATCH_LEN = 5
 const K_MIN_SEARCH_SCORE = 2
@@ -254,7 +256,7 @@ const roundVerdict = computed(() => {
   <div style="font-family: system-ui, sans-serif; line-height: 1.6">
     <h3>🔍 匹配查找算法 · SA 构建 + 逐轮查找动态演示</h3>
     <div style="font-size:12px; color:#868e96; margin-bottom:10px">
-      对照 <code>suffix_string.cpp:117 _suffixString_create</code>（生产=divsufsort 线性排序）+ <code>:155 _lower_bound</code>（二分）+ <code>diff.cpp:149 getBestMatch</code>（左右探测）+ <code>:308 _search_cover</code>（newPos 推进主循环）
+      对照 <code>suffix_string.cpp:117 _suffixString_create</code>（生产=divsufsort 线性排序）+ <code>:155 _lower_bound</code>（二分）+ <code>diff.cpp:149 getBestMatch</code>（左右探测，循环体 :164-209）+ <code>diff.cpp:299 _search_cover</code>（newPos 推进主循环 :309-340）
     </div>
 
     <!-- 输入 -->
@@ -379,12 +381,12 @@ const roundVerdict = computed(() => {
           <strong>二分第 {{ curSearch.data.step }} 步：</strong>区间 [{{ curSearch.data.lo }}, {{ curSearch.data.hi }}] 取中点 SA[{{ curSearch.data.mid }}] → old[{{ curSearch.data.sufStart }}..] "{{ curSearch.data.suffix }}…"；
           逐字符比：公共前缀 {{ curSearch.data.eq }} 字符，首个差异 "{{ curSearch.data.suffix[curSearch.data.eq] }}" vs "{{ queryStr[curSearch.data.eq] }}" →
           后缀{{ curSearch.data.cmp < 0 ? '小' : '大' }} → {{ curSearch.data.cmp < 0 ? `丢左半（lo=${curSearch.data.loNext}）` : `丢右半（hi=${curSearch.data.hiNext}）` }}
-          <div style="font-family:monospace; font-size:10px; color:#495057; margin-top:3px">suffix_string.cpp:169-191（eq 缓存：下轮从 eq 位接着比）</div>
+          <div style="font-family:monospace; font-size:10px; color:#495057; margin-top:3px">suffix_string.cpp:163-193（left_eq/right_eq 缓存：下轮从已比过的位置接着比）</div>
         </template>
         <template v-else-if="curSearch.kind === 'probe'">
           <strong>探测 {{ curSearch.data.label }}：</strong>SA[{{ curSearch.data.i }}] → old[{{ curSearch.data.op }}..]，实际匹配 {{ curSearch.data.matchLen }}B{{ curSearch.data.matchLen ? `（第 ${curSearch.data.matchLen + 1} 个字符 '${curSearch.data.nextChar}' 处断开）` : '' }} →
           {{ curSearch.data.better ? `✅ 优于当前 best → best=${curSearch.data.bestLen}B@old[${curSearch.data.bestOldPos}]` : '✗ 不优于 best' }}
-          <div style="font-family:monospace; font-size:10px; color:#495057; margin-top:3px">diff.cpp:174-206（matchDeep=2：左右各探测 1 个候选）</div>
+          <div style="font-family:monospace; font-size:10px; color:#495057; margin-top:3px">diff.cpp:164-209（matchDeep=2：mdi=0 看 sai，mdi=1 看 sai−1）</div>
         </template>
         <template v-else>
           <strong :style="{color: roundVerdict?.cls}">{{ roundVerdict?.text }}</strong>

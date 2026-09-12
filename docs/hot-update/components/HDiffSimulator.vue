@@ -1,13 +1,17 @@
 <script setup>
-import { ref, shallowRef, triggerRef, computed } from 'vue'
+import { ref, shallowRef, computed } from 'vue'
 
 // ============ HDiffPatch 单步调试模拟器（diff 生成 + patch 应用 双模式）============
-// 忠实翻译 HDiffPatch v4.12.1：
-//   diff 侧（diff.cpp）：_search_cover(:299) → getBestMatch(:149) → 收益裁决(:323)
-//     → tryLinkExtend(:229) → _select_cover 终审(:390) → serialize(:1269-1286)
-//   patch 侧（patch.c）：getSingleCompressedDiffInfo(:2111) → step loop(:2471)
-//     → copyFromClip(:2505) → _patch_add_old_with_rle0(:2244) → flush+finish(:2534-2542)
-//   二进制格式（HDIFF13，diff.cpp:1269-1286 序列化 / patch.c:2136-2146 反序列化）
+// 忠实翻译 HDiffPatch v4.12.1（本机源码树 C:\References\haru_hdiff\HDiffPatchv4_12_1）：
+//   diff 侧（diff.cpp）：_search_cover(:299，主循环 :309-340) → getBestMatch(:149，循环体 :164-209)
+//     → 收益裁决(:319) → tryLinkExtend(:229) → tryCollinear(:279) → _select_cover 终审(:345)
+//     → serialize_compressed_diff(:1250，尺寸字段 :1269-1286) / serialize_single_compressed_diff(:994)
+//   patch 侧（patch.c）：getSingleCompressedDiffInfo(:2111，三条安全校验 :2136-2141)
+//     → patch_single_stream_diff(:2431) → step loop(:2471) → sspatch_covers_nextCover(:2260)
+//     → copyFromClip(:672，调用点 :2505) → _patch_add_old_with_rle0(:2244) → flush+终检(:2530-2535)
+//   二进制格式（HDIFF13）：序列化 diff.cpp:1269-1286 / 反序列化 patch.c:2129-2134（10 个 packUInt 同序）
+//   常量：kCoverMinMatchLen=5（diff_types.h:71）、kMinMatchScore=2（diff.cpp:65）、
+//         变长整数 7bit（pack_uint.h:38-48）
 //
 // ⚠️ 架构（教训：构建期推进全部状态，点击只做时间线回放。act/回调里推进=死循环 OOM）
 
@@ -49,13 +53,13 @@ const byteHex = (bytes) => bytes.map(hex).join(' ')
 
 // ---------- patch 二进制构建（HDIFF13 无压缩版，忠实 diff.cpp:1269-1286）----------
 function buildPatchBinary(oldBytes, newBytes, covers) {
-  // 类型串 "HDIFF13&" + compressType("") + '\0'
+  // 类型串 "HDIFF13&" + compressType("") + '\0'（源码 _outType，diff.cpp:633-648）
   const typeStr = [...new TextEncoder().encode('HDIFF13&' + '\0')]
-  // covers 控制流（增量编码：oldPos 增量 / length / newPos 增量，diff.cpp:1287 TCoversStream）
+  // covers 控制流（增量编码：oldPos 增量 / length / newPos 增量，diff.cpp:1289 TCoversStream + stream_serialize.cpp:94 __private_packCover）
   const coverBuf = []
   let lastOld = 0, lastNew = 0
   for (const c of covers) {
-    coverBuf.push(...packUInt(2 * (c.oldPos - lastOld)))   // signed→zigzag 思路（源码 _packUIntWithTag diff.cpp:1292+）
+    coverBuf.push(...packUInt(2 * (c.oldPos - lastOld)))   // 源码用 packUIntWithTag(...,tag,1) 编符号位（解码端 patch.c:2261-2268）
     coverBuf.push(...packUInt(c.length))
     coverBuf.push(...packUInt(c.newPos - lastNew))
     lastOld = c.oldPos; lastNew = c.newPos
@@ -121,7 +125,7 @@ function buildDiffSteps(oldText, newText) {
   const push = (text, src, detail) => steps.push({ text, src, detail, coversSnapshot: snap() })
 
   push(`① 准备：old ${oldBytes.length}B / new ${newBytes.length}B，建后缀数组（教学版：全文索引）`,
-    `TSuffixString::resetSuffixString(diff.cpp:890)`,
+    `TSuffixString::resetSuffixString(diff.cpp:898，调用点；函数体在 suffix_string.cpp:275)`,
     `后缀数组 = old 所有后缀的排序索引，O(log n) 查最长匹配`)
 
   let newPos = 0
@@ -133,7 +137,7 @@ function buildDiffSteps(oldText, newText) {
     if (m.len < K_MIN_MATCH_LEN) {
       const shown = newBytes.slice(newPos, newPos + 6).map(c => String.fromCharCode(c)).join('')
       push(`② [newPos=${newPos}] getBestMatch 返回 ${m.len} < kMinMatchLen(${K_MIN_MATCH_LEN}) → 跳过（短匹配"隐形"）`,
-        `diff.cpp:158 bestLength=kMinMatchLen-1; diff.cpp:319 if(matchEqLength<kMinMatchLen) continue`,
+        `diff.cpp:160 bestLength=kMinMatchLen-1; diff.cpp:314 if(matchEqLength<kMinMatchLen) continue`,
         `从 newPos=${newPos} 起 "${shown}…" 最长匹配 ${m.len}B < 5`)
       newPos++; continue
     }
@@ -142,7 +146,7 @@ function buildDiffSteps(oldText, newText) {
     const stage = covers.length ? '_select_cover 终审' : '_search_cover 初审'
     if (score < K_MIN_SEARCH_SCORE) {
       push(`③ [newPos=${newPos}] 匹配 ${m.len}B ≥ 5，但收益 ${m.len} − 控制流成本 ${ctrlCost} = ${score} < ${K_MIN_SEARCH_SCORE}（${stage}）→ 拒绝`,
-        `diff.cpp:323 matchEqLength-getCoverCtrlCost()<kMinMatchScore → ++newPos`,
+        `diff.cpp:319 matchEqLength-getCoverCtrlCost()<kMinMatchScore → ++newPos`,
         `控制流成本 = oldPos增量(${getIntCost(m.oldPos - lastCover.oldPos)}B) + length(${getUIntCost(m.len)}B) + gap(${getUIntCost(newPos - lastCover.newPos)}B)`)
       newPos++; continue
     }
@@ -160,7 +164,7 @@ function buildDiffSteps(oldText, newText) {
           const oldLen = lc.length
           lc.length += linkSpace + linkLen
           push(`④ [newPos=${newPos}] tryLinkExtend：与上一条 cover 间隙 ${linkSpace}B ≤ 511 → 接龙 ${oldLen}B → ${lc.length}B（省一条 cover 入场费）`,
-            `diff.cpp:255 lastLinkCost>matchCost?return:false; diff.cpp:258 len=lastCover.length+linkSpaceLength+(matchCover.length*2/3)`,
+            `diff.cpp:253 lastLinkCost>matchCost?return:false; diff.cpp:255 len=lastCover.length+linkSpaceLength+(matchCover.length*2/3)`,
             `两条相近匹配合并：中间 gap 用残差修正，总成本 < 2 条独立 cover`)
           newPos = lc.newPos + lc.length
           linked = true
@@ -171,7 +175,7 @@ function buildDiffSteps(oldText, newText) {
     covers.push({ oldPos: m.oldPos, newPos, length: m.len, score })
     lastCover = covers[covers.length - 1]
     push(`⑤ [newPos=${newPos}] ✅ 匹配 ${m.len}B @oldPos=${m.oldPos}，收益 ${m.len}−${ctrlCost}=${score} ≥ ${K_MIN_SEARCH_SCORE} → 收入 cover`,
-      `diff.cpp:330 covers.push_back(matchCover); diff.cpp:340 newPos=lastCover.newPos+lastCover.length（不允许重叠）`,
+      `diff.cpp:333 covers.push_back(matchCover); diff.cpp:339 newPos=std::max(newPos+1,lastCover.newPos+lastCover.length)（不允许重叠）`,
       `cover{oldPos:${m.oldPos}, newPos:${newPos}, length:${m.len}}`)
     newPos += m.len
   }
@@ -200,25 +204,25 @@ function buildDiffSteps(oldText, newText) {
     cursor += c.length
   }
   if (newBytes.length > cursor) {
-    push(`⑨ [尾gap] 剩余 ${newBytes.length - cursor}B → newDataDiff`, `patch.c:2530 尾部 flush`, ``)
+    push(`⑨ [尾gap] 剩余 ${newBytes.length - cursor}B → newDataDiff`, `patch.c:2530-2531 flush`, ``)
   }
 
   // ---- 二进制布局步骤（每段一步，高亮对应字节）----
   const L = pb.layout
   push(`🔒 写类型串 "HDIFF13&\\0"（${L.typeStr.length}B）`,
-    `_outType(diff.cpp:636)`,
-    `patch 端读它判断格式版本与压缩插件（patch.c:2111 getSingleCompressedDiffInfo 第一步）`)
+    `_outType(diff.cpp:633-648)`,
+    `patch 端读它判断格式版本与压缩插件（patch.c:2119-2124 第一步）`)
   push(`🔢 写头部 packUInt ×10（${L.head.length}B）：${L.headFields.map(f => `${f.name}=${f.value}`).join(' ')}`,
-    `serialize_compressed_diff(diff.cpp:1279-1289)`,
-    `每个数用 7bit 变长编码（≤127 → 1 字节）。patch 端按同序反解（patch.c:2136-2146）`)
+    `serialize_compressed_diff(diff.cpp:1269-1286)`,
+    `每个数用 7bit 变长编码（≤127 → 1 字节）。patch 端按同序反解（patch.c:2129-2134）`)
   if (L.coverBuf.length) {
     push(`📐 写 covers 控制流（${L.coverBuf.length}B）：每条 cover 3 个 packUInt（oldPos增量·length·gap）`,
-      `TCoversStream(diff.cpp:1292+)`,
+      `TCoversStream(diff.cpp:1289)`,
       `oldPos 是相对上一条 cover 的增量 → cover 越挨着越省`)
   }
   if (L.rleCtrl.length) {
     push(`📦 写残差 rle_ctrl（${L.rleCtrl.length}B）+ rle_code（${L.rleCode.length}B）`,
-      `bytesRLE_save(diff.cpp:1271)`,
+      `bytesRLE_save(diff.cpp:1260；实现在 private_diff/bytes_rle.cpp:135)`,
       `ctrl 是"0 长度串"计数，code 是非零残差字节 —— 全 0 匹配时 code 流为空`)
   }
   push(`💾 写 newDataDiff（${L.newDataDiff.length}B）：${covers.length ? 'gap 字节原样' : '整个新文件'}`,
@@ -264,10 +268,10 @@ function buildPatchSteps(oldText, patchBytes) {
     H[name] = readUInt()
   }
   push(`② 反解头部 10 个 packUInt：newSize=${H.newSize} oldSize=${H.oldSize} coverCount=${H.coverCount} coverBuf=${H.coverBufSize} rleCtrl=${H.rleCtrlSize} rleCode=${H.rleCodeSize} newDataDiff=${H.newDataDiffSize}`,
-    `patch.c:2136-2146`,
+    `patch.c:2129-2134（10 个字段逐个 _clip_unpackUIntTo）`,
     `这些大小让 patch 端能一次 seek 到任意段——流式处理的关键`)
-  push(`③ 安全校验：newSize/oldSize 不超限、coverCount 合理、各段 size 之和 = patch 大小`,
-    `patch.c:2147-2156（__RUN_MEM_SAFE_CHECK）`,
+  push(`③ 安全校验：compressedSize ≤ uncompressedSize、stepMemSize 有上限、各段 size 自洽`,
+    `patch.c:2136-2141（__RUN_MEM_SAFE_CHECK 之外，这三条无条件执行）`,
     `防恶意 patch 声明超大 size 导致内存 DoS（见安全篇）`)
 
   // 解析 covers
@@ -290,7 +294,7 @@ function buildPatchSteps(oldText, patchBytes) {
   function uintLenAt(off) { let n = 0; while (true) { if (!(patchBytes[off + n] & 0x80)) return n + 1; n++ } }
 
   push(`④ 解码 covers 控制流（${covers.length} 条）：oldPos增量/length/gap → 绝对坐标`,
-    `sspatch_covers_nextCover(patch.c:2508)`,
+    `sspatch_covers_nextCover(patch.c:2260)`,
     covers.map((c, i) => `cover[${i}]: oldPos=${c.oldPos} newPos=${c.newPos} len=${c.length}`).join('；'))
 
   // step loop（patch.c:2471）
@@ -338,20 +342,20 @@ function buildPatchSteps(oldText, patchBytes) {
         take -= nzLen
       }
       push(`⑥ [cover] new[${c.newPos}..${c.newPos + c.length}) ← old[${c.oldPos}] 连续 ${c.length}B + 残差修正（"残差加法"）`,
-        `patch.c:2529 _patch_add_old_with_rle0 → _rle0_decoder_add(patch.c:2192)`,
+        `patch.c:2515 _patch_add_old_with_rle0 → _rle0_decoder_add(patch.c:2192)`,
         `out[i] = (old[i] + subDiff[i]) mod 256。匹配质量好 → 残差几乎全 0 → rle0 只花几个长度字节`)
       lastNewEnd = c.newPos + c.length
       coverIdx++
     } else {
       const remain = H.newSize - lastNewEnd
       for (let i = 0; i < remain; i++) out.push(patchBytes[ndPos++])
-      push(`⑦ [尾gap] 剩余 ${remain}B ← newDataDiff`, `patch.c:2530`, ``)
+      push(`⑦ [尾gap] 剩余 ${remain}B ← newDataDiff`, `patch.c:2530-2531 flush`, ``)
       lastNewEnd = H.newSize
     }
   }
 
   push(`⑧ flush 输出 + 终检（inClip 消费完 && outCache 写完 && coverCount==0）→ 成功`,
-    `patch.c:2534-2542`,
+    `patch.c:2530-2535（flush + 三重终检）`,
     `重建结果应与原 new 逐字节一致（可 SHA1 校验——项目里 FilesCheck 就是干这个的）`)
   return steps
 }
