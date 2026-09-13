@@ -3,28 +3,53 @@ layout: home
 hero:
   name: TechDeepDive
   text: 技术细节解析站
-  tagline: 引擎源码逐行核实 · 算法机制深度拆解 · 不做二手转述
+  tagline: 0 基础也能读 · 每步可单步 · 每个结论都能回源码查
   actions:
     - theme: brand
-      text: 开始阅读
+      text: 从 Unity 内存开始
       link: /unity-memory/
     - theme: alt
-      text: GitHub
-      link: https://github.com/fankidark/tech-site
+      text: 先玩交互模拟器
+      link: /unity-memory/tlsf-sim
 features:
-  - icon: 🧠
-    title: 基于源码核实
-    details: 每篇文章直接引用引擎源码（Unity 2020 LTS / HDiffPatch v4.12.1），关键结论可回源码验证，不凭记忆转述
-  - icon: ⚙️
-    title: 算法机制拆解
-    details: 从数据结构到算法流程逐层拆解，含内存布局图、状态转换、复杂度分析、可交互模拟器
-  - icon: 📈
-    title: 持续更新
-    details: 按需添加技术主题（引擎内存/热更新差分/构建管线），每篇独立成文，随时可从左侧目录跳转
+  - icon: 👀
+    title: 先看现象，再看原理
+    details: 每篇都从"这东西解决什么问题"讲起。看不懂算法没关系，先动手把模拟器点一遍，有疑问了再回头翻对应小节——比硬读源码容易得多
+  - icon: 🎬
+    title: 过程都能单步
+    details: 分配、编码、差分、GC 这些"过程"全部做成了可单步的演示：播放/暂停/逐步/变速，每一步都显示当前状态 + 它对应源码的哪一行
+  - icon: 🔍
+    title: 行号经过校验，不是凭记忆写的
+    details: 全站 297 条「源码文件:行号」由脚本逐条到真实源码树核对；站内 955 条链接、131 张表格也都有机械检查兜底
 ---
 
 # 技术主题
 
-- **[Unity 内存管理分配细节](/unity-memory/)** — 从 `UNITY_NEW` 宏到物理内存的完整旅程：TLS 每线程临时分配 + TLSF 两级分割适应算法 + DynamicHeapAllocator 工程集成 + AtomicStack 无锁栈 + Deallocate 反查 + 托管堆 GC（IL2CPP 不分代不压缩）· 含 2 个交互模拟器
-- **[热更新差分（HDiffPatch）](/hot-update/)** — HDiffPatch v4.12.1 源码逐行拆解：cover 数据结构 → diff 生成搜索（后缀数组/收益模型）→ patch 应用（残差加法）→ 手推例子 → 为什么小重复不生成 diff → Unity 项目落地（C#/Lua/native 三层）→ 打包与合并全流程 → 安全与踩坑
-- **[纹理压缩（ETC / ASTC）](/texture-compression/)** — 编码器单步详解 + 一张 100×100 图走完全程：ETC1 把 16 像素压成 8 字节的每一步、ASTC 4×4 / 5×5 / 6×6 三种 footprint 的分别解剖（真实 astcenc 输出逐块拆 128bit 位流，附 Mesa 口径对拍验证）
+三个系列，各自独立成篇，可以只挑你关心的看。
+
+- **[Unity 内存管理分配细节](/unity-memory/)** — 一次 `UNITY_NEW` 到真实地址的完整旅程：
+  label 怎么路由、TLS 每线程栈为什么能免锁、TLSF 两级位图怎么做到 O(1)、
+  大块为什么要绕开池、释放时一个裸指针怎么找回自己的分配器，
+  以及托管堆 GC 为什么在真机上**不分代也不压缩**。
+  · 10 篇 + 7 个交互演示（含单步走完整分配瀑布、TLS 帧分配模拟、ABA 事故复现）
+
+- **[热更新差分（HDiffPatch）](/hot-update/)** — HDiffPatch v4.12.1 逐行拆解：
+  cover 数据结构 → diff 生成的搜索与收益裁决 → patch 应用与残差加法 →
+  手推一遍完整例子 → 为什么小文件不生成 diff → Unity 项目落地 →
+  打包合并全流程 → 安全与踩坑。
+  · 10 篇 + 5 个交互演示（含 patch 字节级解剖、四行字节对齐对照、收益模型计算器）
+
+- **[纹理压缩（ETC / ASTC / BC）](/texture-compression/)** — 编码器单步详解 + 一张 100×100 图走完全程：
+  ETC1 怎么把 16 个像素压成 8 字节、ASTC 三种 footprint 的 128 位分别存了什么、
+  BC1~BC7 另一套范式，以及一个必须讲清的坑（`-cl` LDR 压出的位流里为什么会出现 HDR 端点模式）。
+  · 5 篇 + 一个能上传自己图片的实验台
+
+## 建议玩法
+
+1. **想快速建立直观**：先去 [TLSF 交互模拟器](/unity-memory/tlsf-sim) 或
+   [纹理压缩实验台](/texture-compression/lab) 点几分钟，不用读任何前置。
+2. **想系统搞懂一块**：从对应系列的「总览」页进入——那里有学习路线、术语表和常见误解。
+3. **只想知道某个具体问题**：直接搜。每篇文末都有「自检清单」，能快速确认自己是否真的读懂了。
+
+> 全部结论基于源码逐行核实（Unity 2020 LTS / HDiffPatch v4.12.1 / astc-encoder 5.7.0），
+> 标注源码路径与行号，不做二手转述。无法在本机复验的历史数据会明确标注出来。
