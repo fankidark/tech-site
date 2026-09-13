@@ -14,8 +14,25 @@
 const fs = require('fs')
 const path = require('path')
 
-const DIST = process.argv[2] || path.join('docs', '.vitepress', 'dist')
+// 用法：node scripts/check-links.cjs [dist目录] [--base /tech-site/]
+// 位置参数与 --base 可以任意顺序出现
+function argAfter(flag) {
+  const i = process.argv.indexOf(flag)
+  return i > 0 ? process.argv[i + 1] : null
+}
+const flagValues = new Set(
+  ['--base'].map((f) => argAfter(f)).filter(Boolean)
+)
+const positional = process.argv.slice(2).filter((a) => !a.startsWith('--') && !flagValues.has(a))
+
+const DIST = positional[0] || path.join('docs', '.vitepress', 'dist')
 const distAbs = path.resolve(DIST)
+
+// VitePress 的 base：CI 上用 /tech-site/（GitHub Pages 子路径），本地是 /。
+// 配置见 docs/.vitepress/config.mts —— 那里用 process.env.GITHUB_ACTIONS 判断。
+// 本脚本必须跟着走，否则在 CI 上会把 /tech-site/xxx 当成"不存在的目录"整片误报。
+const BASE = argAfter('--base') || (process.env.GITHUB_ACTIONS ? '/tech-site/' : '/')
+const basePrefix = BASE.endsWith('/') ? BASE.slice(0, -1) : BASE // '' 或 '/tech-site'
 
 if (!fs.existsSync(distAbs)) {
   console.error('找不到构建产物目录:', distAbs, '—— 先跑 npm run build')
@@ -62,9 +79,17 @@ function resolveUrl(fromFile, url) {
   // 而产物里是 hdiff-generate.html；VitePress 自己的侧栏则写成绝对路径。
   // 两种都要按"相对当前页面所在目录"解析。
   const baseDir = path.posix.dirname(fromFile.replace(/\\/g, '/'))
+  // 绝对路径在 CI 产物里带 base 前缀（/tech-site/xxx），
+  // 解析到 dist 根之前必须把这个前缀摘掉。
+  let decoded = decodeURIComponent(pathPart)
+  if (pathPart.startsWith('/') && basePrefix && decoded.startsWith(basePrefix + '/')) {
+    decoded = decoded.slice(basePrefix.length)
+  } else if (pathPart.startsWith('/') && basePrefix && decoded === basePrefix) {
+    decoded = '/'
+  }
   const target = pathPart.startsWith('/')
-    ? path.join(distAbs, decodeURIComponent(pathPart))
-    : path.join(baseDir, decodeURIComponent(pathPart))
+    ? path.join(distAbs, decoded)
+    : path.join(baseDir, decoded)
 
   // cleanUrls 模式下，无扩展名资源由托管方映射到 .html（GitHub Pages 实测支持）
   const candidates = [
@@ -107,7 +132,9 @@ for (const f of htmlFiles) {
     if (/^(https?:|data:)/i.test(src)) continue
     checkedImgs++
     if (!src.startsWith('/')) continue
-    const p = path.join(distAbs, decodeURIComponent(src.split('?')[0]))
+    let p2 = decodeURIComponent(src.split('?')[0])
+    if (basePrefix && p2.startsWith(basePrefix + '/')) p2 = p2.slice(basePrefix.length)
+    const p = path.join(distAbs, p2)
     if (!fs.existsSync(p)) {
       problems.push({ kind: '断图', page: rel, target: src })
     }
