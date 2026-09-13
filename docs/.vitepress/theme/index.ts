@@ -113,11 +113,14 @@ function setupMermaidLightbox() {
     el.dataset.lbDone = '1'
     el.title = '点击全屏查看（滚轮缩放，拖动平移）'
     el.addEventListener('click', (ev) => {
-      // 折叠状态下点的是展开按钮，不弹 lightbox
-      if (el.classList.contains('mermaid-folded')) return
-      // 「原始尺寸」按钮/提示条上的点击不弹
+      // 「原始尺寸」开关和提示条上的点击不弹全屏
       const t = ev.target as HTMLElement
       if (t && t.closest && t.closest('.mermaid-zoomhint')) return
+      // 折叠态的「展开完整流程图」按钮自己处理点击，不弹全屏
+      if (t && t.closest && t.closest('.mermaid-expand')) return
+      // 注意：折叠状态下也允许点开全屏。折叠只是页面上的收纳手段，
+      // 全屏查看才是看长图最舒服的方式，不该被折叠挡住
+      // （早期版本在这里 return 掉了，导致"折叠的图点不开"，体验很差）
       const svg = el.querySelector('svg')
       if (!svg) return
 

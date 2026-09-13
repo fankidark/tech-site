@@ -47,6 +47,21 @@ import TlsfWalkthrough from './components/TlsfWalkthrough.vue'
 | 本档没有就**向更大档借** | `tlsf.c:547-558` | 允许拿到更大的块，切一刀比继续找便宜 |
 | 剩余空间放不下块头时**整块给出** | `tlsf.c:638` | 切出一个无法管理的小块比浪费更糟 |
 
+## 术语先对齐
+
+| 术语 | 一句话解释 |
+|---|---|
+| **TLSF** | Two-Level Segregated Fit，两级分割适应。先用 2 的幂分大档，再在大档内等分 32 小格 |
+| **fl / sl** | first-level / second-level，一级档号与二级槽号，合起来定位一个空闲链表 |
+| **fl_bitmap / sl_bitmap** | 两级位图。某位为 1 表示"那一档有可用空闲块" |
+| **ffs / fls** | 位操作指令：找最低位的 1 / 找最高位的 1。查找快就快在这两条指令上 |
+| **block_header_t** | 块头结构：前块指针 + size（低 2 位复用为状态位）+ 空闲链表前后指针 |
+| **`block_header_overhead`** | 块头对外只暴露 size 字段，即 `sizeof(size_t)`；`prev_phys_block` 寄生在前一块尾部 |
+| **分割（split）** | 把一个大空闲块切成"满足请求的块 + 剩余块"，剩余块还回空闲链表 |
+| **合并（coalesce）** | 释放时把相邻空闲块合成更大的块，对抗外部碎片 |
+| **内部碎片** | 分给你但你没用上的部分（比如要 100B 给了 112B） |
+| **外部碎片** | 空闲总量够，但被切得太散，凑不出连续的大块 |
+
 ## 为什么是 TLSF
 
 传统分配器（dlmalloc 等）在 free 时需要遍历或按 best-fit 搜索，最坏 O(n)。游戏引擎要求**确定性**：一帧内的分配/释放不能出现偶发长耗时。
@@ -350,3 +365,21 @@ tlsf_free(tlsf, ptr)
 
 - `External/Allocator/tlsf` 是纯 C 实现，被 `Runtime/Allocator/DynamicHeapAllocator.cpp` 直接 include 使用（`#include "External/Allocator/tlsf/tlsf.h"`）
 - Unity 的集成做了工程化改造：多 Pool 管理、256MB 虚拟预留、BucketAllocator 快路径、LargeAlloc 溢出路径——见下一篇 [DynamicHeapAllocator：TLSF 的工程集成](./dynamic-heap)
+
+## 自检清单
+
+- [ ] 能画出"两级位图"的结构：一级按 2 的幂分档、二级在大档内等分 32 格，各自存什么
+- [ ] 能解释为什么"向上取整到档位粒度"不会漏掉可用的块
+- [ ] 能说出 `SMALL_BLOCK_SIZE`（256B）以上和以下，桶号计算为什么走两条不同的代码路径
+- [ ] 能说出"本档没块就往更大档找"时，`sl_bitmap` 和 `fl_bitmap` 各被怎么用
+- [ ] 能背出 `block_can_split` 的判据，并解释为什么不满足时宁可给一整块
+- [ ] 能说明 free 时前向/后向合并分别靠哪个字段判断"前一块是否空闲"
+- [ ] 能说出 TLSF 的代价是什么（控制结构开销、合并范围）
+- [ ] 能解释"O(1) 查找"里的常数是怎么做到与堆里块数无关的
+
+## 延伸阅读
+
+- 上一篇：[TLS：每线程临时内存分配](./tls) — 另一条完全不同的分配路径
+- 下一篇：[DynamicHeapAllocator：TLSF 的工程集成](./dynamic-heap) — 算法怎么落地成生产级分配器
+- 🧪 [TLSF 交互模拟器](./tlsf-sim) — 自己点着看分割与合并
+- [AtomicStack：无锁栈](./atomic-stack) — 与"位图 + 链表 + 锁"完全相反的设计路线

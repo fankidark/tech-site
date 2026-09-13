@@ -15,6 +15,22 @@ import MatchSearchSimulator from './components/MatchSearchSimulator.vue'
 **diff 生成**（哪些重复值得存）+ **patch 应用**（怎么用 old + patch 重建 new）+ **后缀数组查找**（二分怎么一步步找到匹配）。
 你看到的每一步都对应源码里的一行，不是动画示意。
 
+## 术语先对齐（不用背，做着做着就熟了）
+
+| 术语 | 一句话解释 |
+|---|---|
+| **diff / patch** | 补丁包。一份"指令单"，描述怎么从 old 得到 new |
+| **cover** | 一条"从 old 的某处复制 N 字节到 new 的某处"的指令。diff 的核心内容就是一串 cover |
+| **gap / 新增段** | 两段 cover 之间"old 里没有"的字节，只能原样写进 patch |
+| **残差（rle0）** | cover 区间里 new 与 old 不完全相同的字节差值；全 0 的连续段会被压缩掉 |
+| **后缀数组** | 把 old 的所有后缀排序后的索引表，用来 O(log n) 查"最长匹配在哪" |
+| **`getBestMatch`** | 用二分 + 左右探测在后缀数组上找最长匹配 |
+| **收益裁决** | cover 的判据：`匹配长度 − 存这条指令的成本 ≥ 阈值`。不够格就不存 |
+| **`kMinMatchLen`** | 最小匹配长度 5：短于它的一律不看（存指令比省下来的还贵） |
+| **HDIFF13 / HDIFFSF20** | 两种 patch 二进制格式。差别在头部字段与覆盖流组织方式 |
+| **`packUInt`** | 变长整数编码：小数值占 1 字节，大的才多占，把头部压小 |
+| **`hpatchz`** | 应用侧工具：读 old + patch，重建出 new |
+
 ## 30 秒上手
 
 <div style="border:2px solid #e8590c;border-radius:10px;padding:12px 16px;background:#fff9db">
