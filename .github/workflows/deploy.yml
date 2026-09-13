@@ -29,7 +29,22 @@ jobs:
       # Pages 只需手动开启一次（Settings→Pages→Source: GitHub Actions），之后每次 push 自动部署。
       - uses: actions/configure-pages@v5
       - run: npm ci
+
+      # 内容结构质检（不依赖本机源码树，CI 上也能跑）：
+      # 表格列数、文章骨架（人话切入/术语表/自检清单/占位符/组件与图片存在性）。
+      # 历史上出现过"表格少一个竖线渲染错位""手写锚点漏连字符"这类
+      # 只有渲染后才看得出来、作者自查很难发现的问题，用脚本兜住。
+      - name: 内容结构质检
+        run: |
+          node scripts/check-tables.cjs
+          node scripts/audit-content.cjs
+
       - run: npm run build
+
+      # 构建产物级检查：断链 / 断图 / 失效锚点
+      - name: 产物链接检查
+        run: node scripts/check-links.cjs
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/.vitepress/dist
